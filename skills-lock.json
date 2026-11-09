@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "skills": {
+    "clean-code": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/clean-code/SKILL.md",
+      "computedHash": "9eae51f2338bb30111de74d3a8c2a6dfb69aabc096f585a92c8080dfab0776b8"
+    },
+    "software-architecture": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/software-architecture/SKILL.md",
+      "computedHash": "e8546ee8fcde3e84c5c372fcb93df68c07d3f0111942555514bbd7f851e20aa2"
+    },
+    "tdd-workflow": {
+      "source": "affaan-m/everything-claude-code",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/tdd-workflow/SKILL.md",
+      "computedHash": "4d9e47fbc0bdf548061d221de67af81eedeb78a206b8fc8ff0a48e69649d9e28"
+    }
+  }
+}

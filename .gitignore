@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+dist/
+*.dmg
+*.zip
+.coverage/
+*.profdata
+*.lcov
+
