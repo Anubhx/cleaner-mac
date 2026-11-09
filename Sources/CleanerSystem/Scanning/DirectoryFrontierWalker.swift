@@ -76,6 +76,15 @@ enum DirectoryFrontierWalker {
             return
         }
 
+        let userLibraryURL = (config.libraryOverride
+            ?? safetyGuard.currentUserHome.appendingPathComponent("Library", isDirectory: true))
+            .standardizedFileURL
+        let userLibraryPath = SafetyGuard.canonicalizeFirmlink(userLibraryURL.path(percentEncoded: false))
+        let explicitLibraryRoot = config.roots.contains { root in
+            let p = SafetyGuard.canonicalizeFirmlink(root.standardizedFileURL.path(percentEncoded: false))
+            return p == userLibraryPath || p.hasPrefix(userLibraryPath + "/")
+        }
+
         let keySet = Set(resourceKeys)
         for child in children {
             if Task.isCancelled { break }
@@ -83,6 +92,10 @@ enum DirectoryFrontierWalker {
             if values.isSymbolicLink == true { continue }
 
             if values.isDirectory == true {
+                let childCanonical = SafetyGuard.canonicalizeFirmlink(child.standardizedFileURL.path(percentEncoded: false))
+                if !explicitLibraryRoot && (childCanonical == userLibraryPath || childCanonical.hasPrefix(userLibraryPath + "/")) {
+                    continue
+                }
                 if EmptyDirectoryPolicy.shouldInspectDirectory(
                     name: child.lastPathComponent,
                     isPackage: values.isPackage ?? false,
@@ -164,3 +177,4 @@ enum DirectoryFrontierWalker {
         }
     }
 }
+

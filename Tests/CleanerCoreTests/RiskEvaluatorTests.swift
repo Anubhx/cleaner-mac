@@ -71,5 +71,14 @@ struct RiskEvaluatorTests {
             now: now
         ) == false)
     }
+
+    @Test("Empty directory policy skips packages, VCS dirs, and Apple library bundles")
+    func emptyDirectoryPolicyProtectsPackages() {
+        #expect(EmptyDirectoryPolicy.shouldInspectDirectory(name: ".git", isPackage: false, isHidden: true) == false)
+        #expect(EmptyDirectoryPolicy.shouldInspectDirectory(name: "Library.photoslibrary", isPackage: false, isHidden: false) == false)
+        #expect(EmptyDirectoryPolicy.shouldInspectDirectory(name: "Edit.fcpbundle", isPackage: false, isHidden: false) == false)
+        #expect(EmptyDirectoryPolicy.shouldInspectDirectory(name: "Backup.sparsebundle", isPackage: false, isHidden: false) == false)
+        #expect(EmptyDirectoryPolicy.shouldInspectDirectory(name: "Downloads", isPackage: false, isHidden: false) == true)
+    }
 }
 

@@ -58,7 +58,7 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 ## 4. Verification Commands
 
 ```bash
-# Run full unit + integration test suite (49 tests across 8 suites)
+# Run full unit + integration test suite (51 tests across 8 suites)
 ./scripts/run-tests.sh
 
 # Run with LLVM code coverage instrumentation

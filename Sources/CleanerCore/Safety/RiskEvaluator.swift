@@ -121,6 +121,11 @@ public enum EmptyDirectoryPolicy {
         "playground",
         "photoslibrary",
         "musiclibrary",
+        "fcpbundle",
+        "imovielibrary",
+        "tvlibrary",
+        "sparsebundle",
+        "sparseimage",
     ]
 
     public static func shouldInspectDirectory(

@@ -74,9 +74,13 @@ Every `ScannedItem` carries a human-readable `RiskAssessment(level:reason:)`:
 | Old Files | **Review Carefully** | No auto-selection on scan | Untouched past age threshold; confirm it is not an intentional archive. |
 | Orphaned `Application Support` | **Review Carefully** | Never | May hold presets, templates, SQLite databases, or license keys. |
 | Orphaned Caches / Saved State | **Low Risk** | Dead category safe | Owning app bundle ID absent (verified with dotted-lineage matching). |
-| Stale Caches | **Low Risk** | Dead category safe | Regenerable application cache files. |
+| Stale Caches | **Low Risk** | Dead category safe | Third-party caches untouched `>= 30 days` (`com.apple.*` spared); safely recreated by apps. |
 | Broken Downloads | **Low Risk** | Dead category safe | Partial extensions (`.download`, `.crdownload`, `.part`, `.partial`, `.opdownload`) untouched `>= 24 hours`. |
-| Empty Folders | **Low Risk** | Dead category safe | Excludes `.git`, `.svn`, `.hg`, `.Trash`, `.app`, `.xcodeproj`, `.photoslibrary`, etc. |
+| Empty Folders | **Low Risk** | Dead category safe | Excludes `.git`, `.svn`, `.hg`, `.Trash`, `.app`, `.xcodeproj`, `.photoslibrary`, `.fcpbundle`, `.sparsebundle`, etc. |
+
+### User Library Walk Isolation
+
+During default scans rooted at `$HOME`, `DirectoryFrontierWalker` skips descending directly into `~/Library` unless the user explicitly adds a `~/Library` path to **Scan Roots**. This prevents user preferences, keychains, sandboxes, and mail stores from surfacing in **Duplicates**, **Large Files**, or **Old Files**, while `DeadFileScanner` safely audits only approved `~/Library` cleanup subtrees (`Caches`, `Logs`, `HTTPStorages`, `Saved Application State`, `WebKit`, and `Application Support`).
 
 ### Orphaned App Fail-Safe
 

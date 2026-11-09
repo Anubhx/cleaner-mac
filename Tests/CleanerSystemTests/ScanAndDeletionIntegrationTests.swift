@@ -359,5 +359,96 @@ struct ScanAndDeletionIntegrationTests {
         #expect(report.failures.count == 1)
         #expect(FileManager.default.fileExists(atPath: locked.path))
     }
+
+    @Test("Scans stale third-party caches while sparing fresh caches, Apple caches, and Library internals")
+    func scansStaleCachesAndIsolatesUserLibraryWalk() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let appsRoot = sandbox.appendingPathComponent("Applications", isDirectory: true)
+        let installedContents = appsRoot.appendingPathComponent("KeepApp.app/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: installedContents, withIntermediateDirectories: true)
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.KeepApp</string></dict></plist>
+        """
+        try Data(plist.utf8).write(to: installedContents.appendingPathComponent("Info.plist"))
+
+        let lib = sandbox.appendingPathComponent("Library", isDirectory: true)
+        let staleCacheDir = lib.appendingPathComponent("Caches/com.example.KeepApp", isDirectory: true)
+        let freshCacheDir = lib.appendingPathComponent("Caches/com.example.FreshApp", isDirectory: true)
+        let appleCacheDir = lib.appendingPathComponent("Caches/com.apple.Safari", isDirectory: true)
+        let prefsDir = lib.appendingPathComponent("Preferences", isDirectory: true)
+        let docsDir = sandbox.appendingPathComponent("Documents", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: staleCacheDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: freshCacheDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: appleCacheDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: prefsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: docsDir, withIntermediateDirectories: true)
+
+        let staleDate = Date().addingTimeInterval(-45 * 24 * 3600)
+        let staleFile = staleCacheDir.appendingPathComponent("old.cache")
+        try Data(repeating: 0x22, count: 16_384).write(to: staleFile)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: staleFile.path)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: staleCacheDir.path)
+
+        let freshFile = freshCacheDir.appendingPathComponent("hot.cache")
+        try Data(repeating: 0x33, count: 16_384).write(to: freshFile)
+
+        let appleFile = appleCacheDir.appendingPathComponent("apple.cache")
+        try Data(repeating: 0x44, count: 16_384).write(to: appleFile)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: appleFile.path)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: appleCacheDir.path)
+
+        let prefPlist = prefsDir.appendingPathComponent("com.example.KeepApp.plist")
+        try Data(repeating: 0x55, count: 16_384).write(to: prefPlist)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: prefPlist.path)
+
+        let docOld = docsDir.appendingPathComponent("archive.tar")
+        try Data(repeating: 0x66, count: 16_384).write(to: docOld)
+        try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: docOld.path)
+
+        // Add KeepApp fresh ID too so FreshApp isn't flagged as orphan
+        let freshContents = appsRoot.appendingPathComponent("FreshApp.app/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: freshContents, withIntermediateDirectories: true)
+        let freshPlist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.FreshApp</string></dict></plist>
+        """
+        try Data(freshPlist.utf8).write(to: freshContents.appendingPathComponent("Info.plist"))
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: lib,
+            appSearchRootsOverride: [appsRoot],
+            categories: [.largeFiles, .oldFiles, .deadFiles],
+            largeFileThresholdBytes: 8_192,
+            oldFileThresholdDays: 30
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        let dead = outcome.items(in: .deadFiles)
+        let hasStale = dead.contains {
+            $0.url == staleCacheDir.standardizedFileURL && $0.deadKind == .staleCache && $0.risk.level == .low
+        }
+        let hasFresh = dead.contains { $0.url == freshCacheDir.standardizedFileURL }
+        let hasApple = dead.contains { $0.url == appleCacheDir.standardizedFileURL }
+        #expect(hasStale)
+        #expect(!hasFresh)
+        #expect(!hasApple)
+
+        // Library internals should not pollute Large/Old user files when scanning $HOME
+        let largeURLs = Set(outcome.items(in: .largeFiles).map(\.url))
+        let oldURLs = Set(outcome.items(in: .oldFiles).map(\.url))
+        #expect(largeURLs.contains(docOld.standardizedFileURL))
+        #expect(!largeURLs.contains(prefPlist.standardizedFileURL))
+        #expect(oldURLs.contains(docOld.standardizedFileURL))
+        #expect(!oldURLs.contains(prefPlist.standardizedFileURL))
+    }
 }
 

@@ -55,6 +55,11 @@ enum CategoryClassifier {
             safetyGuard: safetyGuard,
             excludedFolders: configuration.excludedFolders
         ))
+        combined.append(contentsOf: DeadFileScanner.scanStaleCaches(
+            libraryRoot: libraryRoot,
+            safetyGuard: safetyGuard,
+            excludedFolders: configuration.excludedFolders
+        ))
 
         var seenURLs = Set<URL>()
         return combined
@@ -81,3 +86,4 @@ enum CategoryClassifier {
         )
     }
 }
+

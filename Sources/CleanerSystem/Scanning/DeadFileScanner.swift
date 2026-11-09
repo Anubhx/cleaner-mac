@@ -76,6 +76,68 @@ public enum DeadFileScanner {
         return results
     }
 
+    public static func scanStaleCaches(
+        libraryRoot: URL,
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        staleDays: Int = 30,
+        now: Date = Date()
+    ) -> [ScannedItem] {
+        let fm = FileManager.default
+        let cachesRoot = libraryRoot.appendingPathComponent("Caches", isDirectory: true)
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey,
+            .isSymbolicLinkKey,
+            .contentModificationDateKey,
+            .creationDateKey,
+            .fileSizeKey,
+            .fileAllocatedSizeKey,
+        ]
+        guard let entries = try? fm.contentsOfDirectory(
+            at: cachesRoot,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        let cutoff = now.addingTimeInterval(-TimeInterval(staleDays) * 86_400)
+        var results: [ScannedItem] = []
+
+        for entry in entries {
+            let name = entry.lastPathComponent
+            if name.lowercased().hasPrefix("com.apple.") { continue }
+            guard let values = try? entry.resourceValues(forKeys: Set(keys)),
+                  values.isSymbolicLink != true else { continue }
+            guard (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil,
+                  FilesystemProbes.isCleanableByCurrentProcess(entry) else { continue }
+            guard let modified = values.contentModificationDate, modified < cutoff else { continue }
+
+            let isDir = values.isDirectory ?? false
+            let size = isDir
+                ? FilesystemProbes.directorySize(at: entry)
+                : UInt64(max(0, values.fileAllocatedSize ?? values.fileSize ?? 0))
+            guard size > 0 else { continue }
+
+            results.append(ScannedItem(
+                url: entry,
+                name: name,
+                logicalSize: size,
+                allocatedSize: size,
+                isDirectory: isDir,
+                modifiedDate: modified,
+                createdDate: values.creationDate,
+                accessedDate: nil,
+                category: .deadFiles,
+                deadKind: .staleCache,
+                risk: RiskEvaluator.assess(category: .deadFiles, deadKind: .staleCache),
+                inode: FilesystemProbes.inodeIdentity(for: entry),
+                linkCount: 1,
+                isCloudDataless: false
+            ))
+        }
+
+        return results
+    }
+
     public static func scanBrokenDownloads(
         downloadsRoot: URL,
         safetyGuard: SafetyGuard,
