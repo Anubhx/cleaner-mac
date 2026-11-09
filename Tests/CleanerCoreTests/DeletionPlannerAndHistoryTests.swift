@@ -100,6 +100,45 @@ struct DeletionPlannerAndHistoryTests {
             userTrashRoot: trashRoot
         )
         #expect(decisionValid == .restore(fromTrash: validItem.trashPath, to: validItem.originalPath))
+
+        let missing = TrashReceiptPolicy.planRestore(
+            entry: validItem,
+            trashExists: false,
+            currentTrashInode: nil,
+            originalExists: false,
+            userTrashRoot: trashRoot
+        )
+        #expect(missing == .skippedMissingFromTrash(originalPath: validItem.originalPath))
+
+        let exists = TrashReceiptPolicy.planRestore(
+            entry: validItem,
+            trashExists: true,
+            currentTrashInode: 4455,
+            originalExists: true,
+            userTrashRoot: trashRoot
+        )
+        #expect(exists == .skippedOriginalExists(originalPath: validItem.originalPath))
+    }
+
+    @Test("Computes deduplicated reclaimable bytes, model labels, and safety error messages")
+    func outcomeMetricsAndModelMetadata() {
+        let sharedURL = URL(fileURLWithPath: "/Users/alice/Downloads/movie.mkv")
+        let keepOrig = ScannedItem(url: URL(fileURLWithPath: "/Users/alice/Downloads/orig.mkv"), name: "orig.mkv", logicalSize: 2000, allocatedSize: 2000, isDirectory: false, category: .duplicates, isRecommendedKeep: true)
+        let dupCopy = ScannedItem(url: sharedURL, name: "movie.mkv", logicalSize: 2000, allocatedSize: 2000, isDirectory: false, category: .duplicates, isRecommendedKeep: false)
+        let largeCopy = ScannedItem(url: sharedURL, name: "movie.mkv", logicalSize: 2000, allocatedSize: 2000, isDirectory: false, category: .largeFiles)
+
+        let outcome = ScanOutcome(itemsByCategory: [.duplicates: [keepOrig, dupCopy], .largeFiles: [largeCopy]])
+        #expect(outcome.totalReclaimableBytes == 2000)
+
+        for cat in ScanCategory.allCases {
+            #expect(!cat.displayName.isEmpty)
+            #expect(!cat.symbolName.isEmpty)
+            #expect(!cat.subtitle.isEmpty)
+        }
+        #expect(DeletionMode.permanentDelete(confirmed: false).isPermanent == true)
+        #expect(DeletionMode.moveToTrash.isPermanent == false)
+        #expect(SafetyError.protectedPath("/System").errorDescription?.isEmpty == false)
+        #expect(SafetyError.tooManyFiles(10_001).errorDescription?.contains("10000") == true)
     }
 }
 

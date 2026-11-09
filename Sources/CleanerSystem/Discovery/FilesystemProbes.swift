@@ -26,7 +26,7 @@ public enum FilesystemProbes {
         var info = stat()
         guard lstat(path, &info) == 0 else { return false }
 
-        let immutableFlags = UInt32(UF_IMMUTABLE | SF_IMMUTABLE)
+        let immutableFlags = UInt32(UF_IMMUTABLE | SF_IMMUTABLE) | UInt32(UF_DATAVAULT)
         if (info.st_flags & immutableFlags) != 0 {
             return false
         }

@@ -257,6 +257,9 @@ struct ScanAndDeletionIntegrationTests {
         #expect(restoreResult.restoredIDs == Set(saved.map(\.id)))
         #expect(restoreResult.failures.isEmpty)
         #expect(FileManager.default.fileExists(atPath: file.path))
+
+        await store.remove(ids: restoreResult.restoredIDs)
+        #expect((await store.loadEntries()).isEmpty)
     }
 
     @Test("Deletion blocks TOCTOU symlink pointing into protected /System directory")
@@ -330,6 +333,31 @@ struct ScanAndDeletionIntegrationTests {
         )
         #expect(deleteReport.succeededCount == 1)
         #expect(!FileManager.default.fileExists(atPath: fileB.path))
+    }
+
+    @Test("Refuses deletion of files carrying user immutable flag")
+    func blocksImmutableLockedFilesDuringDeletion() async throws {
+        let sandbox = try makeSandbox()
+        let fakeTrash = sandbox.appendingPathComponent(".TestTrash", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeTrash, withIntermediateDirectories: true)
+
+        let locked = sandbox.appendingPathComponent("locked.txt")
+        try Data("immutable".utf8).write(to: locked)
+        #expect(chflags(locked.path, UInt32(UF_IMMUTABLE)) == 0)
+        defer {
+            _ = chflags(locked.path, 0)
+            try? FileManager.default.removeItem(at: sandbox)
+        }
+
+        let item = ScannedItem(url: locked, name: "locked.txt", logicalSize: 9, allocatedSize: 4096, isDirectory: false, category: .oldFiles)
+        let executor = DeletionExecutor(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            trashDriver: DirectoryTrashDriver(trashDirectory: fakeTrash)
+        )
+        let report = try await executor.execute(items: [item], mode: .moveToTrash, dryRun: false)
+        #expect(report.succeededCount == 0)
+        #expect(report.failures.count == 1)
+        #expect(FileManager.default.fileExists(atPath: locked.path))
     }
 }
 
