@@ -1,34 +1,5 @@
 import Foundation
 
-public enum SafetyError: Error, LocalizedError, Equatable, Sendable {
-    case invalidPath(String)
-    case protectedPath(String)
-    case outsideUserScope(String)
-    case appBundleProtected(String)
-    case userExcluded(String)
-    case symlinkEscape(String)
-    case tooManyFiles(Int)
-
-    public var errorDescription: String? {
-        switch self {
-        case .invalidPath(let path):
-            "Invalid or malformed path: \(path)"
-        case .protectedPath(let path):
-            "Protected macOS system or Library path cannot be modified: \(path)"
-        case .outsideUserScope(let path):
-            "Path belongs to another user account and is off-limits: \(path)"
-        case .appBundleProtected(let path):
-            "Application bundles are protected unless explicitly selected: \(path)"
-        case .userExcluded(let path):
-            "Path is inside a user-excluded folder: \(path)"
-        case .symlinkEscape(let path):
-            "Symlink resolves outside the authorized scope into a protected target: \(path)"
-        case .tooManyFiles(let count):
-            "Batch exceeds the safety limit of \(SafetyGuard.maxFilesPerOperation) items (attempted \(count))"
-        }
-    }
-}
-
 public struct SafetyGuard: Sendable {
     public static let maxFilesPerOperation = 10_000
 
@@ -54,7 +25,7 @@ public struct SafetyGuard: Sendable {
     }
 
     public static func canonicalizeFirmlink(_ path: String) -> String {
-        let trimmed = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+        let trimmed = stripTrailingSlash(path)
         for firmlink in ["/private/var", "/private/tmp", "/private/etc"] {
             if trimmed == firmlink || trimmed.hasPrefix(firmlink + "/") {
                 return String(trimmed.dropFirst("/private".count))
@@ -68,12 +39,8 @@ public struct SafetyGuard: Sendable {
         excludedFolders: [String] = [],
         allowAppBundles: Bool = false
     ) throws {
-        guard !rawPath.isEmpty else {
-            throw SafetyError.invalidPath("(empty)")
-        }
-        guard !rawPath.contains("\0") else {
-            throw SafetyError.invalidPath(rawPath)
-        }
+        guard !rawPath.isEmpty else { throw SafetyError.invalidPath("(empty)") }
+        guard !rawPath.contains("\0") else { throw SafetyError.invalidPath(rawPath) }
         try validatePath(
             URL(fileURLWithPath: rawPath),
             excludedFolders: excludedFolders,
@@ -91,17 +58,13 @@ public struct SafetyGuard: Sendable {
         }
 
         let raw = Self.stripTrailingSlash(url.path(percentEncoded: false))
-        guard !raw.isEmpty else {
-            throw SafetyError.invalidPath("(empty)")
-        }
-        if raw.contains("\0") {
-            throw SafetyError.invalidPath(raw)
-        }
+        guard !raw.isEmpty else { throw SafetyError.invalidPath("(empty)") }
+        guard !raw.contains("\0") else { throw SafetyError.invalidPath(raw) }
 
-        let canonical = Self.canonicalizeFirmlink(Self.stripTrailingSlash(url.standardizedFileURL.path(percentEncoded: false)))
-        guard !canonical.isEmpty else {
-            throw SafetyError.invalidPath("(empty)")
-        }
+        let canonical = Self.canonicalizeFirmlink(
+            Self.stripTrailingSlash(url.standardizedFileURL.path(percentEncoded: false))
+        )
+        guard !canonical.isEmpty else { throw SafetyError.invalidPath("(empty)") }
 
         try validateProtectedPrefixes(canonical, displayPath: raw)
         try validateUserScope(canonical, displayPath: raw)
@@ -117,7 +80,9 @@ public struct SafetyGuard: Sendable {
     ) throws {
         try validatePath(original, excludedFolders: excludedFolders, allowAppBundles: allowAppBundles)
         let resolvedDisplay = Self.stripTrailingSlash(resolved.path(percentEncoded: false))
-        let resolvedCanonical = Self.canonicalizeFirmlink(Self.stripTrailingSlash(resolved.standardizedFileURL.path(percentEncoded: false)))
+        let resolvedCanonical = Self.canonicalizeFirmlink(
+            Self.stripTrailingSlash(resolved.standardizedFileURL.path(percentEncoded: false))
+        )
 
         do {
             try validateProtectedPrefixes(resolvedCanonical, displayPath: resolvedDisplay)
@@ -128,10 +93,6 @@ public struct SafetyGuard: Sendable {
 
         try validateAppBundle(url: resolved, allowAppBundles: allowAppBundles, displayPath: resolvedDisplay)
         try validateExclusions(resolvedCanonical, excludedFolders: excludedFolders, displayPath: resolvedDisplay)
-    }
-
-    private static func stripTrailingSlash(_ path: String) -> String {
-        path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
     public func validateBatch(
@@ -149,10 +110,8 @@ public struct SafetyGuard: Sendable {
 
     public func isScanDirectoryAllowed(_ url: URL, excludedFolders: [String] = []) -> Bool {
         let canonical = Self.canonicalizeFirmlink(url.standardizedFileURL.path(percentEncoded: false))
-        for prefix in Self.protectedPrefixes {
-            if Self.matchesBoundary(canonical, prefix: prefix) {
-                return false
-            }
+        for prefix in Self.protectedPrefixes where Self.matchesBoundary(canonical, prefix: prefix) {
+            return false
         }
         if canonical.hasPrefix("/Users/") {
             let homeCanonical = Self.canonicalizeFirmlink(currentUserHome.path(percentEncoded: false))
@@ -161,7 +120,9 @@ public struct SafetyGuard: Sendable {
             }
         }
         for excluded in excludedFolders {
-            let excludedCanonical = Self.canonicalizeFirmlink(URL(fileURLWithPath: excluded).standardizedFileURL.path(percentEncoded: false))
+            let excludedCanonical = Self.canonicalizeFirmlink(
+                URL(fileURLWithPath: excluded).standardizedFileURL.path(percentEncoded: false)
+            )
             if Self.matchesBoundary(canonical, prefix: excludedCanonical) {
                 return false
             }
@@ -170,21 +131,15 @@ public struct SafetyGuard: Sendable {
     }
 
     private func validateProtectedPrefixes(_ canonical: String, displayPath: String) throws {
-        if canonical == "/" {
+        if canonical == "/" { throw SafetyError.protectedPath(displayPath) }
+        for prefix in Self.protectedPrefixes where Self.matchesBoundary(canonical, prefix: prefix) {
             throw SafetyError.protectedPath(displayPath)
-        }
-        for prefix in Self.protectedPrefixes {
-            if Self.matchesBoundary(canonical, prefix: prefix) {
-                throw SafetyError.protectedPath(displayPath)
-            }
         }
     }
 
     private func validateUserScope(_ canonical: String, displayPath: String) throws {
         let homeCanonical = Self.canonicalizeFirmlink(currentUserHome.path(percentEncoded: false))
-        if canonical == "/Users" {
-            throw SafetyError.outsideUserScope(displayPath)
-        }
+        if canonical == "/Users" { throw SafetyError.outsideUserScope(displayPath) }
         if canonical.hasPrefix("/Users/") {
             let allowedPrefix = homeCanonical.hasPrefix("/Users/") ? homeCanonical : "/Users/\(NSUserName())"
             if !Self.matchesBoundary(canonical, prefix: allowedPrefix) {
@@ -195,12 +150,8 @@ public struct SafetyGuard: Sendable {
 
     private func validateAppBundle(url: URL, allowAppBundles: Bool, displayPath: String) throws {
         guard !allowAppBundles else { return }
-        let hasAppBundleComponent = url.pathComponents.contains { component in
-            component.lowercased().hasSuffix(".app")
-        }
-        if hasAppBundleComponent {
-            throw SafetyError.appBundleProtected(displayPath)
-        }
+        let isInBundle = url.pathComponents.contains { $0.lowercased().hasSuffix(".app") }
+        if isInBundle { throw SafetyError.appBundleProtected(displayPath) }
     }
 
     private func validateExclusions(_ canonical: String, excludedFolders: [String], displayPath: String) throws {
@@ -214,8 +165,11 @@ public struct SafetyGuard: Sendable {
         }
     }
 
+    private static func stripTrailingSlash(_ path: String) -> String {
+        path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
     private static func matchesBoundary(_ path: String, prefix: String) -> Bool {
         path == prefix || path.hasPrefix(prefix + "/")
     }
 }
-

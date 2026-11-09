@@ -17,3 +17,4 @@ if [[ "$DEV_DIR" == "/Library/Developer/CommandLineTools" ]]; then
 else
   exec swift test "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 fi
+
