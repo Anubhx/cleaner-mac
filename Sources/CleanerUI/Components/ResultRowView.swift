@@ -83,7 +83,7 @@ public struct ResultRowView: View {
 
             Spacer(minLength: CleanerSpacing.sm)
 
-            Text(ByteFormatting.string(from: item.logicalSize))
+            Text(ByteFormatting.string(from: item.reclaimableDiskBytes))
                 .font(CleanerTypography.monoMetric)
                 .foregroundStyle(.primary)
         }
@@ -102,7 +102,7 @@ public struct ResultRowView: View {
             onClickRow(currentEventModifiers())
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.name), \(ByteFormatting.string(from: item.logicalSize)), \(item.risk.level.label)")
+        .accessibilityLabel("\(item.name), \(ByteFormatting.string(from: item.reclaimableDiskBytes)), \(item.risk.level.label)")
         .accessibilityValue(isChecked ? "Selected for cleanup" : "Not selected")
         .accessibilityHint("Click to preview. Command-click or Shift-click to multi-select. Press Space to toggle selection.")
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])

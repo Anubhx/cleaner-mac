@@ -81,6 +81,7 @@ public enum DeadFileScanner {
         safetyGuard: SafetyGuard,
         excludedFolders: [String],
         staleDays: Int = 30,
+        minimumActiveCacheBytes: UInt64 = 52_428_800,
         now: Date = Date()
     ) -> [ScannedItem] {
         let fm = FileManager.default
@@ -109,13 +110,17 @@ public enum DeadFileScanner {
                   values.isSymbolicLink != true else { continue }
             guard (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil,
                   FilesystemProbes.isCleanableByCurrentProcess(entry) else { continue }
-            guard let modified = values.contentModificationDate, modified < cutoff else { continue }
 
             let isDir = values.isDirectory ?? false
             let size = isDir
                 ? FilesystemProbes.directorySize(at: entry)
                 : UInt64(max(0, values.fileAllocatedSize ?? values.fileSize ?? 0))
             guard size > 0 else { continue }
+
+            let modified = values.contentModificationDate
+            let isStale = modified.map { $0 < cutoff } ?? false
+            let isHeavyActive = !isStale && size >= minimumActiveCacheBytes
+            guard isStale || isHeavyActive else { continue }
 
             results.append(ScannedItem(
                 url: entry,
@@ -128,13 +133,88 @@ public enum DeadFileScanner {
                 accessedDate: nil,
                 category: .deadFiles,
                 deadKind: .staleCache,
-                risk: RiskEvaluator.assess(category: .deadFiles, deadKind: .staleCache),
+                risk: RiskEvaluator.assess(
+                    category: .deadFiles,
+                    deadKind: .staleCache,
+                    isActiveCache: isHeavyActive
+                ),
                 inode: FilesystemProbes.inodeIdentity(for: entry),
                 linkCount: 1,
                 isCloudDataless: false
             ))
         }
 
+        return results
+    }
+
+    public static func scanDeveloperCaches(
+        homeRoot: URL,
+        libraryRoot: URL,
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        minimumBytes: UInt64 = 10_485_760
+    ) -> [ScannedItem] {
+        var candidates: [(url: URL, displayName: String, isParentOfSubcaches: Bool)] = [
+            (homeRoot.appendingPathComponent(".npm/_cacache", isDirectory: true), "npm Package Cache (.npm/_cacache)", false),
+            (homeRoot.appendingPathComponent(".gradle/caches", isDirectory: true), "Gradle Build Cache (.gradle/caches)", false),
+            (homeRoot.appendingPathComponent(".pnpm-store", isDirectory: true), "pnpm Content Store (.pnpm-store)", false),
+            (homeRoot.appendingPathComponent(".bun/install/cache", isDirectory: true), "Bun Package Cache", false),
+            (homeRoot.appendingPathComponent(".cache", isDirectory: true), "", true),
+            (libraryRoot.appendingPathComponent("Developer/Xcode/DerivedData", isDirectory: true), "Xcode DerivedData", false),
+            (libraryRoot.appendingPathComponent("Developer/Xcode/iOS DeviceSupport", isDirectory: true), "Xcode iOS DeviceSupport", false),
+            (libraryRoot.appendingPathComponent("Developer/CoreSimulator/Caches", isDirectory: true), "iOS Simulator Caches", false),
+        ]
+
+        let fm = FileManager.default
+        var expandedTargets: [(url: URL, label: String)] = []
+        for entry in candidates {
+            if entry.isParentOfSubcaches {
+                guard let subdirs = try? fm.contentsOfDirectory(
+                    at: entry.url,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles]
+                ) else { continue }
+                for sub in subdirs {
+                    let vals = try? sub.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                    if vals?.isDirectory == true && vals?.isSymbolicLink != true {
+                        expandedTargets.append((sub, ".cache/\(sub.lastPathComponent)"))
+                    }
+                }
+            } else {
+                expandedTargets.append((entry.url, entry.displayName))
+            }
+        }
+        candidates.removeAll()
+
+        var results: [ScannedItem] = []
+        for target in expandedTargets {
+            guard fm.fileExists(atPath: target.url.path),
+                  (try? safetyGuard.validatePath(target.url, excludedFolders: excludedFolders)) != nil,
+                  FilesystemProbes.isCleanableByCurrentProcess(target.url) else {
+                continue
+            }
+
+            let size = FilesystemProbes.directorySize(at: target.url)
+            guard size >= minimumBytes else { continue }
+
+            let values = try? target.url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+            results.append(ScannedItem(
+                url: target.url,
+                name: target.label,
+                logicalSize: size,
+                allocatedSize: size,
+                isDirectory: true,
+                modifiedDate: values?.contentModificationDate,
+                createdDate: values?.creationDate,
+                accessedDate: nil,
+                category: .deadFiles,
+                deadKind: .developerCache,
+                risk: RiskEvaluator.assess(category: .deadFiles, deadKind: .developerCache),
+                inode: FilesystemProbes.inodeIdentity(for: target.url),
+                linkCount: 1,
+                isCloudDataless: false
+            ))
+        }
         return results
     }
 

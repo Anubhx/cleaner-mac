@@ -70,17 +70,19 @@ Every `ScannedItem` carries a human-readable `RiskAssessment(level:reason:)`:
 | iCloud Dataless Placeholder | **High Risk** | Never | Deleting a stub may affect synced iCloud Drive files across devices. |
 | Duplicates — **Keep Original** | **Pinned Keep** | **Never** (Checkbox disabled) | Oldest/shortest path selected as canonical original to preserve data. |
 | Duplicates — Extra Copy | **Review Carefully** | Explicit category opt-in only | SHA-256 verified identical bytes; confirm external links or projects. |
-| Large Files | **Review Carefully** | No auto-selection on scan | Exceeds user size threshold; could be archives, VMs, or raw media. |
+| Large Files | **Review Carefully** | No auto-selection on scan | Exceeds user size threshold (`reclaimableDiskBytes` accounts for APFS sparse allocation); flags `~/Library/Containers` / `Application Support` items for verification inside the owning app. |
 | Old Files | **Review Carefully** | No auto-selection on scan | Untouched past age threshold; confirm it is not an intentional archive. |
 | Orphaned `Application Support` | **Review Carefully** | Never | May hold presets, templates, SQLite databases, or license keys. |
 | Orphaned Caches / Saved State | **Low Risk** | Dead category safe | Owning app bundle ID absent (verified with dotted-lineage matching). |
-| Stale Caches | **Low Risk** | Dead category safe | Third-party caches untouched `>= 30 days` (`com.apple.*` spared); safely recreated by apps. |
+| Stale Caches (`>= 30 days`) | **Low Risk** | Dead category safe | Third-party caches untouched `>= 30 days` (`com.apple.*` spared); safely recreated by apps. |
+| Heavy Active Caches (`>= 50 MB`) | **Review Carefully** | Never | Active third-party `~/Library/Caches` `>= 50 MB`; quit the owning app before clearing so it rebuilds cleanly. |
+| Developer & Package Caches | **Low Risk** | Dead category safe | Rebuildable tool caches (`.npm/_cacache`, `.gradle/caches`, `.pnpm-store`, `.bun/install/cache`, `.cache/*`, `Xcode DerivedData`, `iOS DeviceSupport`, `CoreSimulator/Caches`). |
 | Broken Downloads | **Low Risk** | Dead category safe | Partial extensions (`.download`, `.crdownload`, `.part`, `.partial`, `.opdownload`) untouched `>= 24 hours`. |
 | Empty Folders | **Low Risk** | Dead category safe | Excludes `.git`, `.svn`, `.hg`, `.Trash`, `.app`, `.xcodeproj`, `.photoslibrary`, `.fcpbundle`, `.sparsebundle`, etc. |
 
-### User Library Walk Isolation
+### User Library Walk Isolation & Sparse Accounting
 
-During default scans rooted at `$HOME`, `DirectoryFrontierWalker` skips descending directly into `~/Library` unless the user explicitly adds a `~/Library` path to **Scan Roots**. This prevents user preferences, keychains, sandboxes, and mail stores from surfacing in **Duplicates**, **Large Files**, or **Old Files**, while `DeadFileScanner` safely audits only approved `~/Library` cleanup subtrees (`Caches`, `Logs`, `HTTPStorages`, `Saved Application State`, `WebKit`, and `Application Support`).
+During default scans rooted at `$HOME`, `DirectoryFrontierWalker` selectively isolates sensitive `~/Library` subtrees (`Preferences`, `Keychains`, `Cookies`, `Accounts`, `Mail`, `Messages`, `Safari`, `Calendars`, `Contacts`, `Reminders`, `Mobile Documents`, `Group Containers`, `Caches`, `Logs`, `HTTPStorages`, `Saved Application State`, `WebKit`, and nested `Containers/*/Data/Library/<blockedSubdir>`) unless the user explicitly adds a `~/Library` path to **Scan Roots**. Non-blocked subtrees (`Containers`, `Application Support`, `Developer`) are walked only so oversized media, VMs, and runtime images appear under **Large Files** with container context—never in **Duplicates**, **Old Files**, or **Empty Folders**. Meanwhile `DeadFileScanner` safely audits approved cache and orphan locations (`~/Library/Caches`, `Logs`, `Application Support`, plus developer package caches like `~/.npm/_cacache`). Sparse virtual disks (`Docker.raw`) and iCloud dataless stubs are measured by physical allocated disk blocks (`reclaimableDiskBytes`) rather than logical sparse size.
 
 ### Orphaned App Fail-Safe
 

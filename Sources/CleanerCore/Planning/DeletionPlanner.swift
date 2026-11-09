@@ -60,7 +60,7 @@ public struct DeletionPlan: Sendable, Equatable {
     }
 
     public var projectedBytes: UInt64 {
-        entries.reduce(0) { $0 &+ $1.item.logicalSize }
+        entries.reduce(0) { $0 &+ $1.item.reclaimableDiskBytes }
     }
 }
 

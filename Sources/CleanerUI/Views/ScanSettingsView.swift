@@ -216,12 +216,14 @@ public struct ScanSettingsView: View {
         guard let url = pickDirectory(prompt: "Add Scan Root") else { return }
         if !store.configuration.roots.contains(url) {
             store.configuration.roots.append(url)
+            Task { await store.refreshVolumeStorage() }
         }
     }
 
     private func removeScanRoot(_ path: String) {
         guard store.configuration.roots.count > 1 else { return }
         store.configuration.roots.removeAll { $0.path == path }
+        Task { await store.refreshVolumeStorage() }
     }
 
     private func addExcludedFolder() {

@@ -5,6 +5,52 @@ public enum ByteFormatting {
     public static func string(from bytes: UInt64) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)
     }
+
+    public static func actionSizeSuffix(bytes: UInt64) -> String {
+        bytes > 0 ? " (\(string(from: bytes)))" : ""
+    }
+}
+
+public struct DiskCapacityHUD: View {
+    let snapshot: VolumeStorageSnapshot
+
+    public init(snapshot: VolumeStorageSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: CleanerSpacing.xxs) {
+            HStack {
+                Label(snapshot.volumeName, systemImage: "internaldrive")
+                    .font(CleanerTypography.caption)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Spacer()
+                Text("\(Int((snapshot.usedFraction * 100).rounded()))% full")
+                    .font(CleanerTypography.monoPath)
+                    .foregroundStyle(snapshot.usedFraction > 0.85 ? CleanerColors.caution : .secondary)
+            }
+
+            ProgressView(value: snapshot.usedFraction)
+                .progressViewStyle(.linear)
+                .controlSize(.small)
+                .tint(snapshot.usedFraction > 0.85 ? CleanerColors.caution : Color.accentColor)
+
+            HStack {
+                Text("\(ByteFormatting.string(from: snapshot.usedBytes)) used")
+                Spacer()
+                Text("\(ByteFormatting.string(from: snapshot.availableBytes)) free")
+            }
+            .font(CleanerTypography.monoPath)
+            .foregroundStyle(.secondary)
+        }
+        .padding(CleanerSpacing.sm)
+        .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
+        .overlay(
+            RoundedRectangle(cornerRadius: CleanerRadii.md)
+                .stroke(CleanerColors.hairline, lineWidth: 1)
+        )
+    }
 }
 
 public struct RiskBadge: View {

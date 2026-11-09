@@ -43,7 +43,7 @@ public struct MoveToTrashConfirmationSheet: View {
                     Text(item.name)
                         .font(CleanerTypography.body)
                     Spacer()
-                    Text(ByteFormatting.string(from: item.logicalSize))
+                    Text(ByteFormatting.string(from: item.reclaimableDiskBytes))
                         .font(CleanerTypography.monoMetric)
                         .foregroundStyle(.secondary)
                 }

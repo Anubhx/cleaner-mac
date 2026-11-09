@@ -70,7 +70,7 @@ public enum SelectionMetrics {
 
         for item in items where selectedIDs.contains(item.id) {
             if seenURLs.insert(item.url).inserted {
-                total &+= item.logicalSize
+                total &+= item.reclaimableDiskBytes
             }
         }
         return total

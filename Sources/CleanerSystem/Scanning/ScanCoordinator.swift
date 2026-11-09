@@ -181,8 +181,13 @@ public actor ScanCoordinator {
 
     private func finalizeOutcome(state: FrontierWalkState, safetyGuard: SafetyGuard) async -> ScanOutcome {
         let config = state.configuration
+        let libPath = DirectoryFrontierWalker.userLibraryPath(configuration: config, safetyGuard: safetyGuard)
+        let explicitLib = DirectoryFrontierWalker.isExplicitLibraryRoot(configuration: config, userLibraryPath: libPath)
+        let excludedLibraryPrefix: String? = explicitLib ? nil : libPath
+
         var byCategory: [ScanCategory: [ScannedItem]] = [:]
         var duplicateGroups: [DuplicateGroup] = []
+        var totalEvaluatedBytes = state.bytesEvaluated
 
         if config.categories.contains(.largeFiles) {
             byCategory[.largeFiles] = CategoryClassifier.largeFiles(
@@ -194,27 +199,51 @@ public actor ScanCoordinator {
             byCategory[.oldFiles] = CategoryClassifier.oldFiles(
                 from: state.candidates,
                 thresholdDays: config.oldFileThresholdDays,
-                basis: config.ageBasis
+                basis: config.ageBasis,
+                excludedLibraryPrefix: excludedLibraryPrefix
             )
         }
         if config.categories.contains(.deadFiles) {
-            byCategory[.deadFiles] = CategoryClassifier.deadFiles(
+            let dead = CategoryClassifier.deadFiles(
                 emptyDirectories: state.deadItems,
                 configuration: config,
                 safetyGuard: safetyGuard
             )
+            byCategory[.deadFiles] = dead
+            let extraDeadBytes = dead
+                .filter { item in
+                    guard item.deadKind != .emptyDirectory else { return false }
+                    let parentCanonical = SafetyGuard.canonicalizeFirmlink(
+                        item.url.deletingLastPathComponent().standardizedFileURL.path(percentEncoded: false)
+                    )
+                    let itemCanonical = SafetyGuard.canonicalizeFirmlink(
+                        item.url.standardizedFileURL.path(percentEncoded: false)
+                    )
+                    return !state.visited.contains(parentCanonical) && !state.visited.contains(itemCanonical)
+                }
+                .reduce(0) { $0 &+ $1.reclaimableDiskBytes }
+            totalEvaluatedBytes &+= extraDeadBytes
         }
         if config.categories.contains(.duplicates) {
             let hashProgress = ScanProgress(
                 phase: .hashingDuplicates,
                 currentPath: "Verifying content hashes",
                 scannedFiles: state.scannedCount,
-                bytesEvaluated: state.bytesEvaluated,
+                bytesEvaluated: totalEvaluatedBytes,
                 pendingDirectoriesCount: 0,
                 startedAt: state.startedAt
             )
             emitBatch([], progress: hashProgress, finishStream: false)
-            let eligible = state.candidates.filter { $0.logicalSize >= config.minDuplicateBytes }
+            let eligible = state.candidates.filter { item in
+                guard item.logicalSize >= config.minDuplicateBytes else { return false }
+                if let excludedLibraryPrefix {
+                    let canonical = SafetyGuard.canonicalizeFirmlink(item.url.standardizedFileURL.path(percentEncoded: false))
+                    if DirectoryFrontierWalker.isInsideUserLibrary(canonical, userLibraryPath: excludedLibraryPrefix) {
+                        return false
+                    }
+                }
+                return true
+            }
             duplicateGroups = await DuplicateScanPipeline.findDuplicateGroups(eligible)
             byCategory[.duplicates] = duplicateGroups.flatMap(\.allItems)
         }
@@ -224,7 +253,7 @@ public actor ScanCoordinator {
             phase: cancelled ? .cancelled : .completed,
             currentPath: "",
             scannedFiles: state.scannedCount,
-            bytesEvaluated: state.bytesEvaluated,
+            bytesEvaluated: totalEvaluatedBytes,
             pendingDirectoriesCount: 0,
             startedAt: state.startedAt
         )

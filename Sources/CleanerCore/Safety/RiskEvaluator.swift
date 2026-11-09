@@ -5,7 +5,9 @@ public enum RiskEvaluator {
         category: ScanCategory,
         deadKind: DeadFileKind? = nil,
         isCloudDataless: Bool = false,
-        inApplicationSupport: Bool = false
+        inApplicationSupport: Bool = false,
+        inContainerOrSupport: Bool = false,
+        isActiveCache: Bool = false
     ) -> RiskAssessment {
         if isCloudDataless {
             return RiskAssessment(
@@ -21,6 +23,12 @@ public enum RiskEvaluator {
                 reason: "Exact SHA-256 content duplicate; verify external references or project links before removing this copy."
             )
         case .largeFiles:
+            if inContainerOrSupport || inApplicationSupport {
+                return RiskAssessment(
+                    level: .moderate,
+                    reason: "Large file inside an app container or Application Support; verify inside the owning app before removing."
+                )
+            }
             return RiskAssessment(
                 level: .moderate,
                 reason: "Large user file exceeding size threshold; may contain media, archives, or virtual machines you still need."
@@ -31,7 +39,11 @@ public enum RiskEvaluator {
                 reason: "File has not been accessed or modified recently; confirm it is no longer needed as an archive."
             )
         case .deadFiles:
-            return assessDeadFile(kind: deadKind, inApplicationSupport: inApplicationSupport)
+            return assessDeadFile(
+                kind: deadKind,
+                inApplicationSupport: inApplicationSupport,
+                isActiveCache: isActiveCache
+            )
         }
     }
 
@@ -42,7 +54,8 @@ public enum RiskEvaluator {
 
     private static func assessDeadFile(
         kind: DeadFileKind?,
-        inApplicationSupport: Bool
+        inApplicationSupport: Bool,
+        isActiveCache: Bool
     ) -> RiskAssessment {
         switch kind {
         case .orphanedAppData:
@@ -57,9 +70,20 @@ public enum RiskEvaluator {
                 reason: "Orphaned cache or state directory whose owning application bundle ID is no longer installed."
             )
         case .staleCache:
+            if isActiveCache {
+                return RiskAssessment(
+                    level: .moderate,
+                    reason: "Large active application cache; quit the app before removing so it can rebuild cleanly on next launch."
+                )
+            }
             return RiskAssessment(
                 level: .low,
-                reason: "Regenerable application cache file that apps safely recreate on next launch."
+                reason: "Regenerable application cache file untouched 30+ days that apps safely recreate on next launch."
+            )
+        case .developerCache:
+            return RiskAssessment(
+                level: .low,
+                reason: "Developer build or package cache that tools automatically rebuild or re-download when needed."
             )
         case .brokenDownload:
             return RiskAssessment(

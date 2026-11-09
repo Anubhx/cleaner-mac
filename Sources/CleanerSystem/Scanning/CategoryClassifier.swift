@@ -4,19 +4,26 @@ import CleanerCore
 enum CategoryClassifier {
     static func largeFiles(from candidates: [ScannedItem], thresholdBytes: UInt64) -> [ScannedItem] {
         candidates
-            .filter { $0.logicalSize >= thresholdBytes }
+            .filter { $0.reclaimableDiskBytes >= thresholdBytes }
             .map { makeCategorizedItem(from: $0, category: .largeFiles) }
-            .sorted { $0.logicalSize > $1.logicalSize }
+            .sorted { $0.reclaimableDiskBytes > $1.reclaimableDiskBytes }
     }
 
     static func oldFiles(
         from candidates: [ScannedItem],
         thresholdDays: Int,
         basis: AgeBasis,
+        excludedLibraryPrefix: String? = nil,
         now: Date = Date()
     ) -> [ScannedItem] {
         let cutoff = now.addingTimeInterval(-TimeInterval(thresholdDays) * 86_400)
         return candidates.compactMap { item -> ScannedItem? in
+            if let excludedLibraryPrefix {
+                let canonical = SafetyGuard.canonicalizeFirmlink(item.url.standardizedFileURL.path(percentEncoded: false))
+                if DirectoryFrontierWalker.isInsideUserLibrary(canonical, userLibraryPath: excludedLibraryPrefix) {
+                    return nil
+                }
+            }
             let relevantDate: Date?
             switch basis {
             case .lastAccessedOrModified:
@@ -37,8 +44,9 @@ enum CategoryClassifier {
     ) -> [ScannedItem] {
         var combined = emptyDirectories
 
+        let homeRoot = configuration.homeOverride ?? safetyGuard.currentUserHome
         let downloadsRoot = configuration.downloadsOverride
-            ?? safetyGuard.currentUserHome.appendingPathComponent("Downloads", isDirectory: true)
+            ?? homeRoot.appendingPathComponent("Downloads", isDirectory: true)
         combined.append(contentsOf: DeadFileScanner.scanBrokenDownloads(
             downloadsRoot: downloadsRoot,
             safetyGuard: safetyGuard,
@@ -46,7 +54,7 @@ enum CategoryClassifier {
         ))
 
         let libraryRoot = configuration.libraryOverride
-            ?? safetyGuard.currentUserHome.appendingPathComponent("Library", isDirectory: true)
+            ?? homeRoot.appendingPathComponent("Library", isDirectory: true)
         let appRoots = configuration.appSearchRootsOverride ?? InstalledAppIndex.defaultSearchRoots
         let installedIDs = InstalledAppIndex.installedBundleIDs(in: appRoots)
         combined.append(contentsOf: DeadFileScanner.scanOrphanedAppData(
@@ -58,7 +66,15 @@ enum CategoryClassifier {
         combined.append(contentsOf: DeadFileScanner.scanStaleCaches(
             libraryRoot: libraryRoot,
             safetyGuard: safetyGuard,
-            excludedFolders: configuration.excludedFolders
+            excludedFolders: configuration.excludedFolders,
+            minimumActiveCacheBytes: configuration.minimumActiveCacheBytes
+        ))
+        combined.append(contentsOf: DeadFileScanner.scanDeveloperCaches(
+            homeRoot: homeRoot,
+            libraryRoot: libraryRoot,
+            safetyGuard: safetyGuard,
+            excludedFolders: configuration.excludedFolders,
+            minimumBytes: min(10_485_760, configuration.minimumActiveCacheBytes)
         ))
 
         var seenURLs = Set<URL>()

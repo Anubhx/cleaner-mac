@@ -8,6 +8,11 @@ public protocol ScanningServicing: Sendable {
     func pause() async -> ScanCheckpoint
     func resume(from checkpoint: ScanCheckpoint) async -> ScanOutcome
     func cancel() async -> ScanOutcome
+    func volumeStorageSnapshot(for root: URL) async -> VolumeStorageSnapshot?
+}
+
+public extension ScanningServicing {
+    func volumeStorageSnapshot(for root: URL) async -> VolumeStorageSnapshot? { nil }
 }
 
 public protocol DeletionServicing: Sendable {

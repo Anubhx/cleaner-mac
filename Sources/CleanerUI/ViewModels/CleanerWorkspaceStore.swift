@@ -28,6 +28,7 @@ public final class CleanerWorkspaceStore {
     public var isInspectorVisible: Bool = true
 
     public var progress: ScanProgress = ScanProgress()
+    public var volumeStorage: VolumeStorageSnapshot?
     public var isScanning: Bool = false
     public var isPaused: Bool = false
     public var itemsByCategory: [ScanCategory: [ScannedItem]] = [:]
@@ -68,6 +69,12 @@ public final class CleanerWorkspaceStore {
 
     public func loadInitialHistory() async {
         historyEntries = await historyStore.loadEntries()
+        await refreshVolumeStorage()
+    }
+
+    public func refreshVolumeStorage() async {
+        let root = configuration.roots.first ?? FileManager.default.homeDirectoryForCurrentUser
+        volumeStorage = await scanner.volumeStorageSnapshot(for: root)
     }
 
     public func items(for category: ScanCategory) -> [ScannedItem] {
@@ -99,7 +106,7 @@ public final class CleanerWorkspaceStore {
         return filtered.sorted { lhs, rhs in
             switch sortOrder {
             case .sizeDescending:
-                return lhs.logicalSize > rhs.logicalSize
+                return lhs.reclaimableDiskBytes > rhs.reclaimableDiskBytes
             case .dateOldest:
                 return (lhs.modifiedDate ?? .distantFuture) < (rhs.modifiedDate ?? .distantFuture)
             case .nameAscending:
@@ -133,17 +140,36 @@ public final class CleanerWorkspaceStore {
         var seen = Set<URL>()
         return list.reduce(0) { sum, item in
             guard seen.insert(item.url).inserted else { return sum }
-            return sum &+ item.logicalSize
+            return sum &+ item.reclaimableDiskBytes
         }
     }
 
     public var filteredDuplicateGroups: [DuplicateGroup] {
         let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return duplicateGroups }
-        let needle = trimmed.lowercased()
-        return duplicateGroups.filter { group in
-            group.allItems.contains {
-                $0.name.lowercased().contains(needle) || $0.url.path.lowercased().contains(needle)
+        let matched: [DuplicateGroup]
+        if trimmed.isEmpty {
+            matched = duplicateGroups
+        } else {
+            let needle = trimmed.lowercased()
+            matched = duplicateGroups.filter { group in
+                group.allItems.contains {
+                    $0.name.lowercased().contains(needle) || $0.url.path.lowercased().contains(needle)
+                }
+            }
+        }
+
+        return matched.sorted { lhs, rhs in
+            switch sortOrder {
+            case .sizeDescending:
+                return lhs.reclaimableBytes > rhs.reclaimableBytes
+            case .dateOldest:
+                let lDate = lhs.original.modifiedDate ?? .distantFuture
+                let rDate = rhs.original.modifiedDate ?? .distantFuture
+                return lDate < rDate
+            case .nameAscending:
+                return lhs.original.name.localizedStandardCompare(rhs.original.name) == .orderedAscending
+            case .riskHighest:
+                return lhs.reclaimableBytes > rhs.reclaimableBytes
             }
         }
     }
@@ -313,6 +339,7 @@ public final class CleanerWorkspaceStore {
                     await historyStore.append(report.trashHistoryEntries)
                     historyEntries = await historyStore.loadEntries()
                 }
+                await refreshVolumeStorage()
             }
         } catch {
             statusBannerMessage = error.localizedDescription
@@ -351,6 +378,7 @@ public final class CleanerWorkspaceStore {
             selection.handleClick(id: first.id, modifiers: [], orderedIDs: visibleItems.map(\.id))
             refreshPreviewForFocus()
         }
+        await refreshVolumeStorage()
     }
 
     private func removeURLsFromResults(_ removedURLs: Set<URL>) {

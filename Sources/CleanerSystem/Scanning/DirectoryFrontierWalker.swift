@@ -38,6 +38,34 @@ struct FrontierWalkState {
 }
 
 enum DirectoryFrontierWalker {
+    private static let blockedLibraryDirectSubdirs: Set<String> = [
+        "Preferences",
+        "Keychains",
+        "Cookies",
+        "Accounts",
+        "Mail",
+        "Messages",
+        "Safari",
+        "Calendars",
+        "Contacts",
+        "Reminders",
+        "Suggestions",
+        "BiometricKit",
+        "IdentityServices",
+        "HomeKit",
+        "CloudKit",
+        "SyncedPreferences",
+        "Mobile Documents",
+        "Group Containers",
+        "Application Scripts",
+        "LaunchAgents",
+        "Caches",
+        "Logs",
+        "HTTPStorages",
+        "Saved Application State",
+        "WebKit",
+    ]
+
     static let resourceKeys: [URLResourceKey] = [
         .isDirectoryKey,
         .isRegularFileKey,
@@ -46,6 +74,7 @@ enum DirectoryFrontierWalker {
         .isHiddenKey,
         .fileSizeKey,
         .fileAllocatedSizeKey,
+        .totalFileAllocatedSizeKey,
         .contentModificationDateKey,
         .creationDateKey,
         .contentAccessDateKey,
@@ -54,6 +83,25 @@ enum DirectoryFrontierWalker {
         .ubiquitousItemDownloadingStatusKey,
         .contentTypeKey,
     ]
+
+    static func isExplicitLibraryRoot(configuration: ScanConfiguration, userLibraryPath: String) -> Bool {
+        configuration.roots.contains { root in
+            let p = SafetyGuard.canonicalizeFirmlink(root.standardizedFileURL.path(percentEncoded: false))
+            return p == userLibraryPath || p.hasPrefix(userLibraryPath + "/")
+        }
+    }
+
+    static func userLibraryPath(configuration: ScanConfiguration, safetyGuard: SafetyGuard) -> String {
+        let userLibraryURL = (configuration.libraryOverride
+            ?? (configuration.homeOverride ?? safetyGuard.currentUserHome)
+                .appendingPathComponent("Library", isDirectory: true))
+            .standardizedFileURL
+        return SafetyGuard.canonicalizeFirmlink(userLibraryURL.path(percentEncoded: false))
+    }
+
+    static func isInsideUserLibrary(_ path: String, userLibraryPath: String) -> Bool {
+        path == userLibraryPath || path.hasPrefix(userLibraryPath + "/")
+    }
 
     static func inspectDirectory(
         _ directory: URL,
@@ -71,18 +119,14 @@ enum DirectoryFrontierWalker {
             options: options
         ) else { return }
 
-        if children.isEmpty && config.categories.contains(.deadFiles) {
+        let libPath = userLibraryPath(configuration: config, safetyGuard: safetyGuard)
+        let explicitLib = isExplicitLibraryRoot(configuration: config, userLibraryPath: libPath)
+        let dirCanonical = SafetyGuard.canonicalizeFirmlink(directory.standardizedFileURL.path(percentEncoded: false))
+        let inUserLibrary = !explicitLib && isInsideUserLibrary(dirCanonical, userLibraryPath: libPath)
+
+        if children.isEmpty && config.categories.contains(.deadFiles) && !inUserLibrary {
             recordEmptyDirectoryIfEligible(directory, state: &state, safetyGuard: safetyGuard, batchBuffer: &batchBuffer)
             return
-        }
-
-        let userLibraryURL = (config.libraryOverride
-            ?? safetyGuard.currentUserHome.appendingPathComponent("Library", isDirectory: true))
-            .standardizedFileURL
-        let userLibraryPath = SafetyGuard.canonicalizeFirmlink(userLibraryURL.path(percentEncoded: false))
-        let explicitLibraryRoot = config.roots.contains { root in
-            let p = SafetyGuard.canonicalizeFirmlink(root.standardizedFileURL.path(percentEncoded: false))
-            return p == userLibraryPath || p.hasPrefix(userLibraryPath + "/")
         }
 
         let keySet = Set(resourceKeys)
@@ -93,7 +137,7 @@ enum DirectoryFrontierWalker {
 
             if values.isDirectory == true {
                 let childCanonical = SafetyGuard.canonicalizeFirmlink(child.standardizedFileURL.path(percentEncoded: false))
-                if !explicitLibraryRoot && (childCanonical == userLibraryPath || childCanonical.hasPrefix(userLibraryPath + "/")) {
+                if !explicitLib && shouldSkipUserLibrarySubtree(childCanonical: childCanonical, userLibraryPath: libPath) {
                     continue
                 }
                 if EmptyDirectoryPolicy.shouldInspectDirectory(
@@ -109,6 +153,24 @@ enum DirectoryFrontierWalker {
             guard values.isRegularFile == true else { continue }
             recordRegularFile(child, values: values, state: &state, batchBuffer: &batchBuffer)
         }
+    }
+
+    private static func shouldSkipUserLibrarySubtree(
+        childCanonical: String,
+        userLibraryPath: String
+    ) -> Bool {
+        guard childCanonical.hasPrefix(userLibraryPath + "/") else { return false }
+        let relative = String(childCanonical.dropFirst(userLibraryPath.count + 1))
+        let components = relative.split(separator: "/").map(String.init)
+        guard let top = components.first else { return false }
+        if blockedLibraryDirectSubdirs.contains(top) {
+            return true
+        }
+        // Inside Containers/<bundle>/Data/Library/<blockedSubdir>
+        if top == "Containers", components.count >= 5, components[2] == "Data", components[3] == "Library" {
+            return blockedLibraryDirectSubdirs.contains(components[4])
+        }
+        return false
     }
 
     private static func recordEmptyDirectoryIfEligible(
@@ -151,9 +213,11 @@ enum DirectoryFrontierWalker {
         batchBuffer: inout [ScannedItem]
     ) {
         let size = UInt64(max(0, values.fileSize ?? 0))
-        let allocated = UInt64(max(0, values.fileAllocatedSize ?? values.fileSize ?? 0))
+        let allocated = UInt64(max(0, values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? values.fileSize ?? 0))
+        let dataless = FilesystemProbes.isCloudDataless(values: values)
+        let physicalBytes = dataless ? 0 : min(size, allocated)
         state.scannedCount += 1
-        state.bytesEvaluated &+= size
+        state.bytesEvaluated &+= physicalBytes
 
         let item = ScannedItem(
             url: fileURL,
@@ -167,12 +231,12 @@ enum DirectoryFrontierWalker {
             category: .largeFiles,
             inode: FilesystemProbes.inodeIdentity(for: fileURL),
             linkCount: values.linkCount ?? 1,
-            isCloudDataless: FilesystemProbes.isCloudDataless(values: values),
+            isCloudDataless: dataless,
             contentTypeIdentifier: values.contentType?.identifier
         )
         state.candidates.append(item)
         if state.configuration.categories.contains(.largeFiles)
-            && size >= state.configuration.largeFileThresholdBytes {
+            && physicalBytes >= state.configuration.largeFileThresholdBytes {
             batchBuffer.append(item)
         }
     }

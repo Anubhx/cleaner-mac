@@ -450,5 +450,149 @@ struct ScanAndDeletionIntegrationTests {
         #expect(oldURLs.contains(docOld.standardizedFileURL))
         #expect(!oldURLs.contains(prefPlist.standardizedFileURL))
     }
+
+    @Test("Discovers heavy active caches, developer caches, container media, and total scanned bytes")
+    func scansActiveCachesDeveloperCachesAndLargeContainerBlobs() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let appsRoot = sandbox.appendingPathComponent("Applications", isDirectory: true)
+        let installedContents = appsRoot.appendingPathComponent("KeepApp.app/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: installedContents, withIntermediateDirectories: true)
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.KeepApp</string></dict></plist>
+        """
+        try Data(plist.utf8).write(to: installedContents.appendingPathComponent("Info.plist"))
+
+        let lib = sandbox.appendingPathComponent("Library", isDirectory: true)
+        let heavyActiveCache = lib.appendingPathComponent("Caches/com.example.KeepApp", isDirectory: true)
+        let appleCache = lib.appendingPathComponent("Caches/com.apple.SystemCache", isDirectory: true)
+        let npmCache = sandbox.appendingPathComponent(".npm/_cacache", isDirectory: true)
+        let derivedData = lib.appendingPathComponent("Developer/Xcode/DerivedData/SampleApp", isDirectory: true)
+        let containerDocs = lib.appendingPathComponent("Containers/com.example.Vlog/Data/Documents", isDirectory: true)
+        let containerPrefs = lib.appendingPathComponent("Containers/com.example.Vlog/Data/Library/Preferences", isDirectory: true)
+        let appSupport = lib.appendingPathComponent("Application Support/com.example.KeepApp", isDirectory: true)
+
+        for dir in [heavyActiveCache, appleCache, npmCache, derivedData, containerDocs, containerPrefs, appSupport] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        let payload = Data(repeating: 0x7A, count: 24_576)
+        try payload.write(to: heavyActiveCache.appendingPathComponent("cache.bin"))
+        try payload.write(to: appleCache.appendingPathComponent("sys.bin"))
+        try payload.write(to: npmCache.appendingPathComponent("pkg.tgz"))
+        try payload.write(to: derivedData.appendingPathComponent("Derived.o"))
+
+        let bigVideo = containerDocs.appendingPathComponent("render.mov")
+        let duplicateVideo = sandbox.appendingPathComponent("render-dup.mov")
+        let bigModel = appSupport.appendingPathComponent("weights.bin")
+        let prefBlob = containerPrefs.appendingPathComponent("prefs.plist")
+        let staleDate = Date().addingTimeInterval(-60 * 24 * 3600)
+
+        for u in [bigVideo, duplicateVideo, bigModel, prefBlob] {
+            try payload.write(to: u)
+            try FileManager.default.setAttributes([.modificationDate: staleDate], ofItemAtPath: u.path)
+        }
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: lib,
+            appSearchRootsOverride: [appsRoot],
+            homeOverride: sandbox,
+            categories: Set(ScanCategory.allCases),
+            minDuplicateBytes: 4_096,
+            largeFileThresholdBytes: 16_384,
+            oldFileThresholdDays: 30,
+            minimumActiveCacheBytes: 16_384
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        let dead = outcome.items(in: .deadFiles)
+        let foundHeavyCache = dead.contains { $0.url == heavyActiveCache.standardizedFileURL && $0.deadKind == .staleCache }
+        let foundAppleCache = dead.contains { $0.url == appleCache.standardizedFileURL }
+        let foundNpm = dead.contains { $0.url == npmCache.standardizedFileURL && $0.deadKind == .developerCache }
+        let foundDerived = dead.contains { $0.url == derivedData.deletingLastPathComponent().standardizedFileURL && $0.deadKind == .developerCache }
+        #expect(foundHeavyCache)
+        #expect(!foundAppleCache)
+        #expect(foundNpm)
+        #expect(foundDerived)
+
+        let largeURLs = Set(outcome.items(in: .largeFiles).map(\.url))
+        let oldURLs = Set(outcome.items(in: .oldFiles).map(\.url))
+        #expect(largeURLs.contains(bigVideo.standardizedFileURL))
+        #expect(largeURLs.contains(bigModel.standardizedFileURL))
+        #expect(!largeURLs.contains(prefBlob.standardizedFileURL))
+
+        // Container / Application Support files are surfaced under Large Files with context, not polluted into Old/Duplicates
+        #expect(!oldURLs.contains(bigVideo.standardizedFileURL))
+        #expect(outcome.duplicateGroups.isEmpty)
+        #expect(outcome.progress.bytesEvaluated >= 70_000)
+
+        let volume = FilesystemProbes.volumeStorageSnapshot(for: sandbox)
+        #expect(volume != nil)
+        #expect((volume?.totalBytes ?? 0) > 0)
+    }
+
+    @Test("Measures sparse files by allocated disk blocks and avoids double-counting walked orphan folders")
+    func sparseFileAndNonDoubleCountedProgressTest() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let appsRoot = sandbox.appendingPathComponent("Applications", isDirectory: true)
+        try FileManager.default.createDirectory(at: appsRoot, withIntermediateDirectories: true)
+        let dummyApp = appsRoot.appendingPathComponent("Dummy.app/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: dummyApp, withIntermediateDirectories: true)
+        let dummyPlist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.Dummy</string></dict></plist>
+        """
+        try Data(dummyPlist.utf8).write(to: dummyApp.appendingPathComponent("Info.plist"))
+
+        let containerData = sandbox.appendingPathComponent("Library/Containers/com.docker.docker/Data", isDirectory: true)
+        let orphanAppSupport = sandbox.appendingPathComponent("Library/Application Support/com.example.RemovedApp", isDirectory: true)
+        let libCaches = sandbox.appendingPathComponent("Library/Caches/com.example.HeavyCache", isDirectory: true)
+        for dir in [containerData, orphanAppSupport, libCaches] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        // Create a 40 MB sparse file whose real APFS allocated block usage is tiny (4 KiB)
+        let sparseURL = containerData.appendingPathComponent("Docker.raw")
+        FileManager.default.createFile(atPath: sparseURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: sparseURL)
+        try handle.truncate(atOffset: 40_000_000)
+        try handle.write(contentsOf: Data(repeating: 0x11, count: 4096))
+        try handle.close()
+
+        // Create 20 KB inside Application Support orphan (walked) and 20 KB inside Caches (skipped by walker)
+        let orphanPayload = Data(repeating: 0x22, count: 20_000)
+        try orphanPayload.write(to: orphanAppSupport.appendingPathComponent("orphan.db"))
+        let cachePayload = Data(repeating: 0x33, count: 20_000)
+        try cachePayload.write(to: libCaches.appendingPathComponent("cache.bin"))
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: sandbox.appendingPathComponent("Library"),
+            appSearchRootsOverride: [appsRoot],
+            homeOverride: sandbox,
+            categories: [.largeFiles, .deadFiles],
+            largeFileThresholdBytes: 1_000_000,
+            minimumActiveCacheBytes: 16_384
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        let largeURLs = Set(outcome.items(in: .largeFiles).map(\.url))
+        #expect(!largeURLs.contains(sparseURL.standardizedFileURL))
+        // Walked (~44 KB incl sparse allocated + orphan + dummy Info.plist) + skipped cache (20 KB) must stay well under 200 KB (never 40 MB)
+        // Also orphanAppSupport (~20 KB) must NOT be double-counted on top of walked bytes
+        #expect(outcome.progress.bytesEvaluated < 200_000)
+        #expect(outcome.progress.bytesEvaluated < 60_000)
+    }
 }
 

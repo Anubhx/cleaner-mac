@@ -121,14 +121,20 @@ public struct CleanerRootView: View {
 
             Divider()
 
-            BackgroundScanHUD(
-                progress: store.progress,
-                isScanning: store.isScanning,
-                isPaused: store.isPaused,
-                onPause: { Task { await store.pauseScan() } },
-                onResume: { Task { await store.resumeScan() } },
-                onCancel: { Task { await store.cancelScan() } }
-            )
+            VStack(spacing: CleanerSpacing.xs) {
+                if let snapshot = store.volumeStorage {
+                    DiskCapacityHUD(snapshot: snapshot)
+                }
+
+                BackgroundScanHUD(
+                    progress: store.progress,
+                    isScanning: store.isScanning,
+                    isPaused: store.isPaused,
+                    onPause: { Task { await store.pauseScan() } },
+                    onResume: { Task { await store.resumeScan() } },
+                    onCancel: { Task { await store.cancelScan() } }
+                )
+            }
             .padding(CleanerSpacing.sm)
         }
         .background(.ultraThinMaterial)

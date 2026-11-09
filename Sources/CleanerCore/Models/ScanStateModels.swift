@@ -106,7 +106,7 @@ public struct ScanOutcome: Sendable, Equatable {
         var total: UInt64 = 0
         for item in allItems where !item.isRecommendedKeep {
             if seenURLs.insert(item.url).inserted {
-                total &+= item.logicalSize
+                total &+= item.reclaimableDiskBytes
             }
         }
         return total

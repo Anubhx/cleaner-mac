@@ -53,7 +53,8 @@ public struct ScannedItem: Identifiable, Codable, Sendable, Equatable, Hashable 
             category: category,
             deadKind: deadKind,
             isCloudDataless: isCloudDataless,
-            inApplicationSupport: url.path.contains("/Library/Application Support/")
+            inApplicationSupport: url.path.contains("/Library/Application Support/"),
+            inContainerOrSupport: url.path.contains("/Library/Containers/") || url.path.contains("/Library/Application Support/")
         )
         self.inode = inode
         self.linkCount = linkCount
@@ -64,6 +65,12 @@ public struct ScannedItem: Identifiable, Codable, Sendable, Equatable, Hashable 
 
     public var effectiveSize: UInt64 {
         allocatedSize > 0 ? allocatedSize : logicalSize
+    }
+
+    /// Physical disk bytes reclaimed if removed (uses allocated storage for sparse files and 0 for dataless stubs).
+    public var reclaimableDiskBytes: UInt64 {
+        if isCloudDataless { return 0 }
+        return min(logicalSize, allocatedSize)
     }
 
     public func markedAsKeep(_ keep: Bool) -> ScannedItem {
@@ -101,7 +108,7 @@ public struct DuplicateGroup: Identifiable, Codable, Sendable, Equatable {
     }
 
     public var reclaimableBytes: UInt64 {
-        duplicates.reduce(0) { $0 &+ $1.logicalSize }
+        duplicates.reduce(0) { $0 &+ $1.reclaimableDiskBytes }
     }
 
     public var allItems: [ScannedItem] {

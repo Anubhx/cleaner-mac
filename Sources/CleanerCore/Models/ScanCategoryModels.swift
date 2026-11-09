@@ -39,6 +39,7 @@ public enum ScanCategory: String, CaseIterable, Codable, Sendable, Identifiable 
 public enum DeadFileKind: String, Codable, Sendable {
     case orphanedAppData
     case staleCache
+    case developerCache
     case brokenDownload
     case emptyDirectory
 
@@ -46,9 +47,31 @@ public enum DeadFileKind: String, Codable, Sendable {
         switch self {
         case .orphanedAppData: "Orphaned App Data"
         case .staleCache: "Stale Cache"
+        case .developerCache: "Developer Cache"
         case .brokenDownload: "Broken Download"
         case .emptyDirectory: "Empty Folder"
         }
+    }
+}
+
+public struct VolumeStorageSnapshot: Sendable, Equatable {
+    public let volumeName: String
+    public let totalBytes: UInt64
+    public let availableBytes: UInt64
+
+    public init(volumeName: String, totalBytes: UInt64, availableBytes: UInt64) {
+        self.volumeName = volumeName
+        self.totalBytes = totalBytes
+        self.availableBytes = availableBytes
+    }
+
+    public var usedBytes: UInt64 {
+        totalBytes >= availableBytes ? totalBytes - availableBytes : 0
+    }
+
+    public var usedFraction: Double {
+        guard totalBytes > 0 else { return 0 }
+        return min(1.0, max(0.0, Double(usedBytes) / Double(totalBytes)))
     }
 }
 

@@ -294,6 +294,38 @@ struct CleanerUITests {
         #expect(store.isScanning == false)
         _ = await scanTask.value
     }
+
+    @Test("Sorts duplicate groups using workspace sortOrder and omits zero-byte action size label")
+    @MainActor
+    func duplicateGroupSortingAndZeroByteActionLabel() async {
+        let g1 = DuplicateGroup(
+            id: "h1",
+            original: makeItem(name: "z-file.png", size: 200, category: .duplicates, keep: true),
+            duplicates: [makeItem(name: "z-copy.png", size: 200, category: .duplicates, keep: false)]
+        )
+        let g2 = DuplicateGroup(
+            id: "h2",
+            original: makeItem(name: "a-file.png", size: 900, category: .duplicates, keep: true),
+            duplicates: [makeItem(name: "a-copy.png", size: 900, category: .duplicates, keep: false)]
+        )
+        let outcome = ScanOutcome(itemsByCategory: [.duplicates: g1.allItems + g2.allItems], duplicateGroups: [g1, g2])
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: outcome),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService()
+        )
+        await store.startScan()
+
+        store.sortOrder = .nameAscending
+        #expect(store.filteredDuplicateGroups.map(\.original.name) == ["a-file.png", "z-file.png"])
+
+        store.sortOrder = .sizeDescending
+        #expect(store.filteredDuplicateGroups.map(\.original.name) == ["a-file.png", "z-file.png"])
+
+        #expect(ByteFormatting.actionSizeSuffix(bytes: 0) == "")
+        #expect(!ByteFormatting.actionSizeSuffix(bytes: 2048).isEmpty)
+    }
 }
 
 private actor FakeScanningService: ScanningServicing {

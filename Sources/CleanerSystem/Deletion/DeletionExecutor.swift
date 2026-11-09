@@ -118,14 +118,14 @@ public actor DeletionExecutor {
                     historyEntries.append(TrashHistoryEntry(
                         originalPath: item.url.path,
                         trashPath: destination.path,
-                        bytes: item.logicalSize,
+                        bytes: item.reclaimableDiskBytes,
                         trashInode: trashInode
                     ))
                 case .permanentDelete:
                     try FileManager.default.removeItem(at: item.url)
                 }
                 succeeded.append(item)
-                reclaimed &+= item.logicalSize
+                reclaimed &+= item.reclaimableDiskBytes
             } catch {
                 failures.append(DeletionFailure(url: item.url, reason: error.localizedDescription))
             }

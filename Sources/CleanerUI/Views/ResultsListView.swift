@@ -88,7 +88,7 @@ public struct ResultsListView: View {
 
             if !store.checkedItemsInAllCategories.isEmpty {
                 let count = store.checkedItemsInAllCategories.count
-                let sizeLabel = ByteFormatting.string(from: store.checkedUniqueBytes)
+                let sizeSuffix = ByteFormatting.actionSizeSuffix(bytes: store.checkedUniqueBytes)
 
                 Button(role: .destructive) {
                     store.requestBatchPermanentDelete()
@@ -104,8 +104,8 @@ public struct ResultsListView: View {
                 } label: {
                     Label(
                         store.isDryRunEnabled
-                            ? "Simulate (\(count) · \(sizeLabel))"
-                            : "Move \(count) to Trash (\(sizeLabel))",
+                            ? "Simulate (\(count)\(sizeSuffix))"
+                            : "Move \(count) to Trash\(sizeSuffix)",
                         systemImage: store.isDryRunEnabled ? "eye" : "trash"
                     )
                 }

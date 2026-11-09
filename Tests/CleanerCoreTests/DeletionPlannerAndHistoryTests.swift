@@ -140,5 +140,47 @@ struct DeletionPlannerAndHistoryTests {
         #expect(SafetyError.protectedPath("/System").errorDescription?.isEmpty == false)
         #expect(SafetyError.tooManyFiles(10_001).errorDescription?.contains("10000") == true)
     }
+
+    @Test("Uses physical allocated bytes for sparse files and zero bytes for iCloud dataless stubs")
+    func sparseAndDatalessDiskSizing() {
+        let sparseVM = ScannedItem(
+            url: URL(fileURLWithPath: "/Users/alice/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"),
+            name: "Docker.raw",
+            logicalSize: 245_000_000_000,
+            allocatedSize: 5_850_000_000,
+            isDirectory: false,
+            category: .largeFiles
+        )
+        let datalessStub = ScannedItem(
+            url: URL(fileURLWithPath: "/Users/alice/Documents/CloudArchive.zip"),
+            name: "CloudArchive.zip",
+            logicalSize: 500_000_000,
+            allocatedSize: 0,
+            isDirectory: false,
+            category: .oldFiles,
+            isCloudDataless: true
+        )
+        let normalFile = ScannedItem(
+            url: URL(fileURLWithPath: "/Users/alice/Downloads/photo.png"),
+            name: "photo.png",
+            logicalSize: 30_000_000,
+            allocatedSize: 30_003_200,
+            isDirectory: false,
+            category: .largeFiles
+        )
+
+        #expect(sparseVM.reclaimableDiskBytes == 5_850_000_000)
+        #expect(datalessStub.reclaimableDiskBytes == 0)
+        #expect(normalFile.reclaimableDiskBytes == 30_000_000)
+
+        let selected = SelectionMetrics.uniqueSelectedBytes(
+            items: [sparseVM, datalessStub, normalFile],
+            selectedIDs: Set([sparseVM.id, datalessStub.id, normalFile.id])
+        )
+        #expect(selected == 5_880_000_000)
+
+        let outcome = ScanOutcome(itemsByCategory: [.largeFiles: [sparseVM, normalFile], .oldFiles: [datalessStub]])
+        #expect(outcome.totalReclaimableBytes == 5_880_000_000)
+    }
 }
 

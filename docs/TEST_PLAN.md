@@ -13,10 +13,10 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 
 | Target | Focus | Runner | Target Coverage | Measured Line Coverage |
 | :--- | :--- | :--- | :--- | :--- |
-| `CleanerCoreTests` | `SafetyGuard`, `RiskEvaluator`, `OrphanAppDetector`, `DuplicateGrouper`, `HardLinkTracker`, `DeletionPlanner`, `TrashReceiptPolicy` | `./scripts/run-tests.sh` | `>= 85%` | `89.71%` |
-| `CleanerSystemTests` | Staged SHA-256 duplicate pipeline, large/old/dead scanners, Pause/Resume frontier parity, Cancel responsiveness, Dry-Run invariance, Trash vs Permanent Delete, `CleanHistoryStore` | `./scripts/run-tests.sh` | `>= 85%` | `90.88%` |
-| `CleanerPreviewTests` | Image, Video, PDF, Text/Code (including truncation & UTF-16), Audio metadata, Fallback metadata inspection | `./scripts/run-tests.sh` | `>= 80%` | `94.66%` |
-| `CleanerUITests` | Multi-select state (`Shift`/`Cmd`/`Cmd+A`/`Space`), category filtering, sorting, Pause/Resume/Cancel, Dry-Run gating, Confirmation sheet invariants, Font registration | `./scripts/run-tests.sh` | `>= 80%` (ViewModels & State) | `84.85%` |
+| `CleanerCoreTests` | `SafetyGuard`, `RiskEvaluator`, `OrphanAppDetector`, `DuplicateGrouper`, `HardLinkTracker`, `DeletionPlanner`, `TrashReceiptPolicy` | `./scripts/run-tests.sh` | `>= 85%` | `89.78%` |
+| `CleanerSystemTests` | Staged SHA-256 duplicate pipeline, large/old/dead/developer-cache scanners, sparse allocation metrics, Pause/Resume frontier parity, Cancel responsiveness, Dry-Run invariance, Trash vs Permanent Delete, `CleanHistoryStore` | `./scripts/run-tests.sh` | `>= 85%` | `91.73%` |
+| `CleanerPreviewTests` | Image, Video, PDF, Text/Code (including truncation & UTF-16), Audio metadata, Fallback metadata inspection | `./scripts/run-tests.sh` | `>= 80%` | `94.94%` |
+| `CleanerUITests` | Multi-select state (`Shift`/`Cmd`/`Cmd+A`/`Space`), category filtering, group sorting, Pause/Resume/Cancel, Dry-Run gating, Confirmation sheet invariants, Font registration | `./scripts/run-tests.sh` | `>= 80%` (ViewModels & State) | `84.88%` |
 
 ---
 
@@ -43,6 +43,7 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 | `SAF-07` | Batch exceeding `maxFilesPerOperation` (`10,000`) | Rejected with `SafetyError.tooManyFiles` |
 | `SAF-08` | Orphan detector when `installedBundleIDs` is empty | Returns `false` for all candidates (fail-safe) |
 | `SAF-09` | Orphan detector on `com.apple.*`, shared runtimes, and `.helper` of installed app | Never flagged; sibling company apps (e.g., installed Photoshop vs uninstalled Illustrator) remain distinct |
+| `SAF-10` | Sparse virtual disk (`Docker.raw`) and iCloud dataless placeholder | Measured by physical allocated disk blocks (`reclaimableDiskBytes`), never inflated by logical hole size |
 
 ### 3.3 Background Scanning, Pause/Resume, Cancel & Dry-Run
 | Case ID | Scenario | Expected Outcome |
@@ -58,7 +59,7 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 ## 4. Verification Commands
 
 ```bash
-# Run full unit + integration test suite (51 tests across 8 suites)
+# Run full unit + integration test suite (55 tests across 8 suites)
 ./scripts/run-tests.sh
 
 # Run with LLVM code coverage instrumentation

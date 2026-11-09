@@ -66,5 +66,26 @@ public enum FilesystemProbes {
         }
         return total
     }
+
+    public static func volumeStorageSnapshot(for url: URL) -> VolumeStorageSnapshot? {
+        let probeURL = FileManager.default.fileExists(atPath: url.path) ? url : URL(fileURLWithPath: "/")
+        let keys: Set<URLResourceKey> = [
+            .volumeNameKey,
+            .volumeTotalCapacityKey,
+            .volumeAvailableCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey,
+        ]
+        guard let values = try? probeURL.resourceValues(forKeys: keys),
+              let total = values.volumeTotalCapacity,
+              total > 0 else {
+            return nil
+        }
+        let avail = values.volumeAvailableCapacity ?? Int(clamping: values.volumeAvailableCapacityForImportantUsage ?? 0)
+        return VolumeStorageSnapshot(
+            volumeName: values.volumeName ?? "Macintosh HD",
+            totalBytes: UInt64(max(0, total)),
+            availableBytes: UInt64(max(0, avail))
+        )
+    }
 }
 
