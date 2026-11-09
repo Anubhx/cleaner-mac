@@ -1,0 +1,49 @@
+name: Bug Report
+description: Report a defect, crash, false-positive detection, or safety edge case
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue. Remember: **do not** share private sensitive filenames in public logs, and report unpatched security/safety bypasses privately per [SECURITY.md](../../SECURITY.md).
+  - type: input
+    id: macos_version
+    attributes:
+      label: macOS Version & Chip
+      placeholder: "e.g. macOS 15.4 on Apple Silicon M4"
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Area
+      options:
+        - Duplicate Scanner
+        - Large / Old / Dead File Detection
+        - Safety Guard / Protected Paths
+        - Preview Pane
+        - Trash / Restore History
+        - SwiftUI / Keyboard Navigation
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of expected vs. actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Preflight
+      options:
+        - label: I tested with Dry-Run or verified no personal secrets remain in snippets
+        - label: I searched existing issues to confirm this is not a duplicate

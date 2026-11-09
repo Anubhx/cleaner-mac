@@ -11,12 +11,12 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 
 ## 2. Test Suites & Coverage Goals
 
-| Target | Focus | Runner | Target Coverage |
-| :--- | :--- | :--- | :--- |
-| `CleanerCoreTests` | `SafetyGuard`, `RiskEvaluator`, `OrphanAppDetector`, `DuplicateGrouper`, `HardLinkTracker`, `DeletionPlanner`, `TrashReceiptPolicy` | `swift test` | `>= 90%` |
-| `CleanerSystemTests` | Staged SHA-256 duplicate pipeline, large/old/dead scanners, Pause/Resume frontier parity, Cancel responsiveness, Dry-Run invariance, Trash vs Permanent Delete | `swift test` | `>= 85%` |
-| `CleanerPreviewTests` | Image, Video, PDF, Text/Code (including truncation), Audio metadata, Fallback metadata + SHA-256 inspection | `swift test` | `>= 80%` |
-| `CleanerUITests` | Multi-select state (`Shift`/`Cmd`/`Cmd+A`), category filtering, Dry-Run gating, Confirmation sheet invariants, Font registration | `swift test` | `>= 80%` |
+| Target | Focus | Runner | Target Coverage | Measured Line Coverage |
+| :--- | :--- | :--- | :--- | :--- |
+| `CleanerCoreTests` | `SafetyGuard`, `RiskEvaluator`, `OrphanAppDetector`, `DuplicateGrouper`, `HardLinkTracker`, `DeletionPlanner`, `TrashReceiptPolicy` | `./scripts/run-tests.sh` | `>= 85%` | `89.71%` |
+| `CleanerSystemTests` | Staged SHA-256 duplicate pipeline, large/old/dead scanners, Pause/Resume frontier parity, Cancel responsiveness, Dry-Run invariance, Trash vs Permanent Delete, `CleanHistoryStore` | `./scripts/run-tests.sh` | `>= 85%` | `90.88%` |
+| `CleanerPreviewTests` | Image, Video, PDF, Text/Code (including truncation & UTF-16), Audio metadata, Fallback metadata inspection | `./scripts/run-tests.sh` | `>= 80%` | `94.66%` |
+| `CleanerUITests` | Multi-select state (`Shift`/`Cmd`/`Cmd+A`/`Space`), category filtering, sorting, Pause/Resume/Cancel, Dry-Run gating, Confirmation sheet invariants, Font registration | `./scripts/run-tests.sh` | `>= 80%` (ViewModels & State) | `84.85%` |
 
 ---
 
@@ -49,8 +49,8 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 | :--- | :--- | :--- |
 | `SCN-01` | Pause active scan after initial batch, then resume from `ScanCheckpoint` | Resumed scan finishes with exact same file set as uninterrupted scan (zero duplicates, zero drops) |
 | `SCN-02` | Cancel mid-scan on nested directory tree | Scan terminates promptly (`< 500 ms`), transitions to `.cancelled`, leaves partial state consistent |
-| `SCN-03` | Execute cleanup with `dryRun == true` | Returns `DryRunReport` with expected byte savings; all files remain untouched on disk |
-| `SCN-04` | Permanent deletion requested without `explicitConfirmation == true` | Throws `DeletionError.confirmationRequired` without touching disk |
+| `SCN-03` | Execute cleanup with `dryRun == true` | Returns `DeletionExecutionReport(isDryRun: true)` with expected byte savings; all files remain untouched on disk |
+| `SCN-04` | Permanent deletion requested without `confirmed == true` | Throws `DeletionPlanError.permanentConfirmationRequired` without touching disk |
 | `SCN-05` | Move to Trash + Restore receipt verification | Records Trash path and inode; refuses restore if Trash inode changed or outside Trash root |
 
 ---
@@ -58,10 +58,10 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 ## 4. Verification Commands
 
 ```bash
-# Run full unit + integration test suite
-swift test
+# Run full unit + integration test suite (49 tests across 8 suites)
+./scripts/run-tests.sh
 
-# Run with code coverage report
-swift test --enable-code-coverage
+# Run with LLVM code coverage instrumentation
+./scripts/run-tests.sh --enable-code-coverage
 ```
 

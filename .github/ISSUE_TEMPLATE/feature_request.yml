@@ -1,0 +1,26 @@
+name: Feature Request
+description: Propose a safe enhancement, scanner target, or UI improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What clutter or workflow pain point does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution & Safety Considerations
+      description: How should this work safely and reversibly without touching protected paths?
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Design & Architecture Alignment
+      options:
+        - label: Aligns with Trash-first reversibility and protected-path guards
+        - label: Follows CleanerMac zero-network and zero-emoji HIG principles

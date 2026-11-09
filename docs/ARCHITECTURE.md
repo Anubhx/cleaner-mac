@@ -43,7 +43,7 @@ CleanerMac is a 100% local, privacy-preserving native macOS disk-cleaning utilit
 │                          CleanerCore                           │
 │  Domain models, SafetyGuard, RiskEvaluator, OrphanAppDetector, │
 │  DuplicateGrouper, HardLinkTracker, DeletionPlanner,           │
-│  DryRunReport, CleanHistoryStore                               │
+│  TrashReceiptPolicy                                            │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -137,34 +137,36 @@ cleaner-mac/
 │   │   └── ci.yml
 │   └── pull_request_template.md
 ├── Resources/
-│   ├── Fonts/
-│   │   ├── InstrumentSerif-Regular.ttf
-│   │   ├── InstrumentSerif-Italic.ttf
-│   │   └── OFL.txt
 │   └── Info.plist
 ├── Sources/
 │   ├── CleanerCore/
-│   │   ├── Models/
-│   │   ├── Safety/
 │   │   ├── Analysis/
+│   │   ├── History/
+│   │   ├── Models/
 │   │   ├── Planning/
-│   │   └── History/
+│   │   └── Safety/
 │   ├── CleanerSystem/
-│   │   ├── Scanning/
-│   │   ├── Hashing/
+│   │   ├── Deletion/
 │   │   ├── Discovery/
-│   │   └── Deletion/
+│   │   ├── Hashing/
+│   │   ├── History/
+│   │   └── Scanning/
 │   ├── CleanerPreview/
 │   │   ├── Models/
 │   │   └── Providers/
 │   ├── CleanerUI/
-│   │   ├── DesignSystem/
 │   │   ├── Components/
+│   │   ├── DesignSystem/
+│   │   ├── Resources/
+│   │   │   └── Fonts/
+│   │   │       ├── InstrumentSerif-Regular.ttf
+│   │   │       ├── InstrumentSerif-Italic.ttf
+│   │   │       └── OFL.txt
 │   │   ├── ViewModels/
 │   │   └── Views/
 │   └── CleanerApp/
 │       ├── CleanerApp.swift
-│       └── FontRegistrar.swift
+│       └── SystemServiceAdapters.swift
 ├── Tests/
 │   ├── CleanerCoreTests/
 │   ├── CleanerSystemTests/
@@ -176,7 +178,8 @@ cleaner-mac/
 │   ├── SAFETY_RULES.md
 │   └── TEST_PLAN.md
 ├── scripts/
-│   └── package-app.sh
+│   ├── package-app.sh
+│   └── run-tests.sh
 ├── Package.swift
 ├── README.md
 ├── CONTRIBUTING.md
