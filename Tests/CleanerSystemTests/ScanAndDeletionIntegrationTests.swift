@@ -18,7 +18,7 @@ struct ScanAndDeletionIntegrationTests {
         defer { try? FileManager.default.removeItem(at: sandbox) }
 
         let size = 64 * 1024
-        var bufferA = Data(repeating: 0xAA, count: size)
+        let bufferA = Data(repeating: 0xAA, count: size)
         var bufferB = bufferA
         bufferB[size / 2] = 0xBB
 
@@ -116,14 +116,171 @@ struct ScanAndDeletionIntegrationTests {
         let baselinePaths = Set(baseline.items(in: .largeFiles).map(\.url.path))
         #expect(baselinePaths.count == 60)
 
-        let pausedCoordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let pausedCoordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(3)
+        )
         try await pausedCoordinator.start(configuration: config)
-        try await Task.sleep(for: .milliseconds(5))
+        try await Task.sleep(for: .milliseconds(10))
         let checkpoint = await pausedCoordinator.pause()
+        #expect(!checkpoint.pendingDirectories.isEmpty)
         let resumedOutcome = await pausedCoordinator.resume(from: checkpoint)
         let resumedPaths = Set(resumedOutcome.items(in: .largeFiles).map(\.url.path))
 
         #expect(resumedPaths == baselinePaths)
+    }
+
+    @Test("Cancel terminates active background scan promptly")
+    func cancelTerminatesPromptly() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        for i in 0..<25 {
+            let dir = sandbox.appendingPathComponent("dir-\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(repeating: 0x01, count: 1024).write(to: dir.appendingPathComponent("f.dat"))
+        }
+
+        let config = ScanConfiguration(roots: [sandbox], categories: [.largeFiles], largeFileThresholdBytes: 512)
+        let coordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(10)
+        )
+
+        let stream = await coordinator.makeProgressStream()
+        let streamTask = Task<ScanPhase, Never> {
+            var phase: ScanPhase = .idle
+            for await batch in stream {
+                phase = batch.progress.phase
+            }
+            return phase
+        }
+
+        try await coordinator.start(configuration: config)
+        try await Task.sleep(for: .milliseconds(25))
+        let cancelOutcome = await coordinator.cancel()
+        let lastPhase = await streamTask.value
+
+        #expect(cancelOutcome.wasCancelled == true)
+        #expect(lastPhase == .cancelled)
+    }
+
+    @Test("Orphaned app scanner identifies removed app caches and support while sparing installed apps")
+    func orphanedAppDataScannerRespectsInstalledApps() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let appsRoot = sandbox.appendingPathComponent("Applications", isDirectory: true)
+        let installedContents = appsRoot.appendingPathComponent("KeepApp.app/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: installedContents, withIntermediateDirectories: true)
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.KeepApp</string></dict></plist>
+        """
+        try Data(plist.utf8).write(to: installedContents.appendingPathComponent("Info.plist"))
+
+        let lib = sandbox.appendingPathComponent("Library", isDirectory: true)
+        let keptCache = lib.appendingPathComponent("Caches/com.example.KeepApp", isDirectory: true)
+        let orphanCache = lib.appendingPathComponent("Caches/com.example.RemovedApp", isDirectory: true)
+        let orphanSupport = lib.appendingPathComponent("Application Support/com.example.RemovedApp", isDirectory: true)
+        try FileManager.default.createDirectory(at: keptCache, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: orphanCache, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: orphanSupport, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 4096).write(to: keptCache.appendingPathComponent("cache.db"))
+        try Data(repeating: 2, count: 4096).write(to: orphanCache.appendingPathComponent("cache.db"))
+        try Data(repeating: 3, count: 4096).write(to: orphanSupport.appendingPathComponent("prefs.json"))
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: lib,
+            appSearchRootsOverride: [appsRoot],
+            categories: [.deadFiles]
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+        let dead = outcome.items(in: .deadFiles)
+
+        #expect(dead.contains(where: { $0.url == orphanCache.standardizedFileURL && $0.risk.level == .low }))
+        #expect(dead.contains(where: { $0.url == orphanSupport.standardizedFileURL && $0.risk.level == .moderate }))
+        #expect(!dead.contains(where: { $0.url == keptCache.standardizedFileURL }))
+    }
+
+    @Test("Hard-linked identical paths are not falsely flagged as duplicates")
+    func hardLinkedFilesAreDeduplicatedDuringScan() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let original = sandbox.appendingPathComponent("original.bin")
+        let hardLink = sandbox.appendingPathComponent("hardlink.bin")
+        try Data(repeating: 0x5A, count: 8192).write(to: original)
+        try FileManager.default.linkItem(at: original, to: hardLink)
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            categories: [.duplicates],
+            minDuplicateBytes: 1024
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        #expect(outcome.duplicateGroups.isEmpty)
+    }
+
+    @Test("Trash move records history receipt and safely restores file to original path")
+    func trashAndRestoreRoundTrip() async throws {
+        let sandbox = try makeSandbox()
+        let fakeTrash = sandbox.appendingPathComponent(".TestTrash", isDirectory: true)
+        let historyFile = sandbox.appendingPathComponent("history.json")
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        try FileManager.default.createDirectory(at: fakeTrash, withIntermediateDirectories: true)
+
+        let file = sandbox.appendingPathComponent("note.md")
+        try Data("important".utf8).write(to: file)
+
+        let item = ScannedItem(url: file, name: "note.md", logicalSize: 9, allocatedSize: 4096, isDirectory: false, category: .oldFiles)
+        let executor = DeletionExecutor(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            trashDriver: DirectoryTrashDriver(trashDirectory: fakeTrash)
+        )
+        let store = CleanHistoryStore(fileURL: historyFile)
+
+        let report = try await executor.execute(items: [item], mode: .moveToTrash, dryRun: false)
+        await store.append(report.trashHistoryEntries)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        let saved = await store.loadEntries()
+        #expect(saved.count == 1)
+
+        let restoreResult = await executor.restore(entries: saved)
+        #expect(restoreResult.restoredIDs == Set(saved.map(\.id)))
+        #expect(restoreResult.failures.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test("Deletion blocks TOCTOU symlink pointing into protected /System directory")
+    func deletionBlocksSymlinkEscapeAtExecutionTime() async throws {
+        let sandbox = try makeSandbox()
+        let fakeTrash = sandbox.appendingPathComponent(".TestTrash", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        try FileManager.default.createDirectory(at: fakeTrash, withIntermediateDirectories: true)
+
+        let trapLink = sandbox.appendingPathComponent("innocent.txt")
+        try FileManager.default.createSymbolicLink(
+            atPath: trapLink.path,
+            withDestinationPath: "/System/Library/CoreServices/Finder.app"
+        )
+
+        let item = ScannedItem(url: trapLink, name: "innocent.txt", logicalSize: 100, allocatedSize: 100, isDirectory: false, category: .deadFiles)
+        let executor = DeletionExecutor(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            trashDriver: DirectoryTrashDriver(trashDirectory: fakeTrash)
+        )
+
+        let report = try await executor.execute(items: [item], mode: .moveToTrash, dryRun: false)
+        #expect(report.succeededCount == 0)
+        #expect(report.failures.count == 1)
     }
 
     @Test("Dry-run preserves files while Trash sink moves and Permanent Delete erases")
