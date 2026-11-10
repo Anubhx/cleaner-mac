@@ -590,9 +590,49 @@ struct ScanAndDeletionIntegrationTests {
         let largeURLs = Set(outcome.items(in: .largeFiles).map(\.url))
         #expect(!largeURLs.contains(sparseURL.standardizedFileURL))
         // Walked (~44 KB incl sparse allocated + orphan + dummy Info.plist) + skipped cache (20 KB) must stay well under 200 KB (never 40 MB)
-        // Also orphanAppSupport (~20 KB) must NOT be double-counted on top of walked bytes
+        // OrphanAppSupport (~20 KB) must NOT be double-counted on top of walked bytes
         #expect(outcome.progress.bytesEvaluated < 200_000)
         #expect(outcome.progress.bytesEvaluated < 60_000)
+    }
+
+    @Test("Descends into macOS UF_HIDDEN Library directory and discovers .npm/_npx cache")
+    func descendsIntoHiddenMacOSLibraryAndNpxCache() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let lib = sandbox.appendingPathComponent("Library", isDirectory: true)
+        let containerDocs = lib.appendingPathComponent("Containers/com.example.Vlog/Data/Documents", isDirectory: true)
+        let npxCache = sandbox.appendingPathComponent(".npm/_npx/cachedpkg", isDirectory: true)
+        try FileManager.default.createDirectory(at: containerDocs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: npxCache, withIntermediateDirectories: true)
+
+        // Mark Library hidden just like macOS sets UF_HIDDEN on ~/Library
+        try (lib as NSURL).setResourceValue(true, forKey: URLResourceKey.isHiddenKey)
+
+        let payload = Data(repeating: 0x4E, count: 24_576)
+        let clipURL = containerDocs.appendingPathComponent("draft.mov")
+        try payload.write(to: clipURL)
+        try payload.write(to: npxCache.appendingPathComponent("bundle.js"))
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: lib,
+            appSearchRootsOverride: [sandbox.appendingPathComponent("Applications")],
+            homeOverride: sandbox,
+            categories: [.largeFiles, .deadFiles],
+            largeFileThresholdBytes: 16_384,
+            minimumActiveCacheBytes: 16_384,
+            skipHiddenFiles: true
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        let largeURLs = Set(outcome.items(in: .largeFiles).map(\.url))
+        #expect(largeURLs.contains(clipURL.standardizedFileURL))
+
+        let deadURLs = Set(outcome.items(in: .deadFiles).map(\.url))
+        #expect(deadURLs.contains(npxCache.deletingLastPathComponent().standardizedFileURL))
     }
 }
 

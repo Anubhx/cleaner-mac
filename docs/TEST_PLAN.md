@@ -14,9 +14,9 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 | Target | Focus | Runner | Target Coverage | Measured Line Coverage |
 | :--- | :--- | :--- | :--- | :--- |
 | `CleanerCoreTests` | `SafetyGuard`, `RiskEvaluator`, `OrphanAppDetector`, `DuplicateGrouper`, `HardLinkTracker`, `DeletionPlanner`, `TrashReceiptPolicy` | `./scripts/run-tests.sh` | `>= 85%` | `89.78%` |
-| `CleanerSystemTests` | Staged SHA-256 duplicate pipeline, large/old/dead/developer-cache scanners, sparse allocation metrics, Pause/Resume frontier parity, Cancel responsiveness, Dry-Run invariance, Trash vs Permanent Delete, `CleanHistoryStore` | `./scripts/run-tests.sh` | `>= 85%` | `91.73%` |
+| `CleanerSystemTests` | Staged SHA-256 duplicate pipeline, large/old/dead/developer-cache scanners, `UF_HIDDEN` Library entry, sparse allocation metrics, Pause/Resume frontier parity, Cancel responsiveness, Dry-Run invariance, Trash vs Permanent Delete, `CleanHistoryStore` | `./scripts/run-tests.sh` | `>= 85%` | `91.48%` |
 | `CleanerPreviewTests` | Image, Video, PDF, Text/Code (including truncation & UTF-16), Audio metadata, Fallback metadata inspection | `./scripts/run-tests.sh` | `>= 80%` | `94.94%` |
-| `CleanerUITests` | Multi-select state (`Shift`/`Cmd`/`Cmd+A`/`Space`), category filtering, group sorting, Pause/Resume/Cancel, Dry-Run gating, Confirmation sheet invariants, Font registration | `./scripts/run-tests.sh` | `>= 80%` (ViewModels & State) | `84.88%` |
+| `CleanerUITests` | Multi-select state (`Shift`/`Cmd`/`Cmd+A`/`Space`), category filtering, group sorting, Scan Again state transitions, Pause/Resume/Cancel, Dry-Run gating, Confirmation sheet invariants, Font registration | `./scripts/run-tests.sh` | `>= 80%` (ViewModels & State) | `85.16%` |
 
 ---
 
@@ -59,7 +59,7 @@ CleanerMac follows strict **Red-Green-Refactor** Test-Driven Development (`tdd-w
 ## 4. Verification Commands
 
 ```bash
-# Run full unit + integration test suite (55 tests across 8 suites)
+# Run full unit + integration test suite (57 tests across 8 suites)
 ./scripts/run-tests.sh
 
 # Run with LLVM code coverage instrumentation

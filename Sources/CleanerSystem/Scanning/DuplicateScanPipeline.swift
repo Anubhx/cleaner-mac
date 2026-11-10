@@ -44,7 +44,7 @@ enum DuplicateScanPipeline {
                         createdDate: item.createdDate,
                         accessedDate: item.accessedDate,
                         category: .duplicates,
-                        inode: item.inode,
+                        inode: item.inode ?? FilesystemProbes.inodeIdentity(for: item.url),
                         linkCount: item.linkCount,
                         isCloudDataless: item.isCloudDataless,
                         contentTypeIdentifier: item.contentTypeIdentifier

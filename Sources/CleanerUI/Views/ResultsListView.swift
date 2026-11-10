@@ -215,7 +215,7 @@ public struct ResultsListView: View {
                 Button {
                     Task { await store.startScan() }
                 } label: {
-                    Label("Run Scan", systemImage: "magnifyingglass")
+                    Label(store.primaryScanActionTitle, systemImage: store.primaryScanActionSymbol)
                 }
                 .buttonStyle(.borderedProminent)
                 .padding(.top, CleanerSpacing.xs)

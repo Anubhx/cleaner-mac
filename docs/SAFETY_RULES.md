@@ -76,7 +76,7 @@ Every `ScannedItem` carries a human-readable `RiskAssessment(level:reason:)`:
 | Orphaned Caches / Saved State | **Low Risk** | Dead category safe | Owning app bundle ID absent (verified with dotted-lineage matching). |
 | Stale Caches (`>= 30 days`) | **Low Risk** | Dead category safe | Third-party caches untouched `>= 30 days` (`com.apple.*` spared); safely recreated by apps. |
 | Heavy Active Caches (`>= 50 MB`) | **Review Carefully** | Never | Active third-party `~/Library/Caches` `>= 50 MB`; quit the owning app before clearing so it rebuilds cleanly. |
-| Developer & Package Caches | **Low Risk** | Dead category safe | Rebuildable tool caches (`.npm/_cacache`, `.gradle/caches`, `.pnpm-store`, `.bun/install/cache`, `.cache/*`, `Xcode DerivedData`, `iOS DeviceSupport`, `CoreSimulator/Caches`). |
+| Developer & Package Caches | **Low Risk** | Dead category safe | Rebuildable tool caches (`.npm/_cacache`, `.npm/_npx`, `.gradle/caches`, `.pnpm-store`, `.bun/install/cache`, `.cache/*`, `Xcode DerivedData`, `iOS DeviceSupport`, `CoreSimulator/Caches`). |
 | Broken Downloads | **Low Risk** | Dead category safe | Partial extensions (`.download`, `.crdownload`, `.part`, `.partial`, `.opdownload`) untouched `>= 24 hours`. |
 | Empty Folders | **Low Risk** | Dead category safe | Excludes `.git`, `.svn`, `.hg`, `.Trash`, `.app`, `.xcodeproj`, `.photoslibrary`, `.fcpbundle`, `.sparsebundle`, etc. |
 

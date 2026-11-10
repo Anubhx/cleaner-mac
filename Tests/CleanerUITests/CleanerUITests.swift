@@ -326,6 +326,42 @@ struct CleanerUITests {
         #expect(ByteFormatting.actionSizeSuffix(bytes: 0) == "")
         #expect(!ByteFormatting.actionSizeSuffix(bytes: 2048).isEmpty)
     }
+
+    @Test("Exposes Scan Again title and symbol after scan completion or cancellation")
+    @MainActor
+    func scanAgainActionTransitions() async {
+        let outcome = ScanOutcome(
+            progress: ScanProgress(phase: .completed, scannedFiles: 12, bytesEvaluated: 4096)
+        )
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: outcome),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService()
+        )
+        #expect(store.hasCompletedOrCancelledScan == false)
+        #expect(store.primaryScanActionTitle == "Scan Mac")
+        #expect(store.primaryScanActionSymbol == "magnifyingglass")
+
+        await store.startScan()
+        #expect(store.hasCompletedOrCancelledScan == true)
+        #expect(store.primaryScanActionTitle == "Scan Again")
+        #expect(store.primaryScanActionSymbol == "arrow.clockwise")
+
+        store.progress.phase = .cancelled
+        #expect(store.hasCompletedOrCancelledScan == true)
+        #expect(store.primaryScanActionTitle == "Scan Again")
+
+        _ = BackgroundScanHUD(
+            progress: store.progress,
+            isScanning: false,
+            isPaused: false,
+            onPause: {},
+            onResume: {},
+            onCancel: {},
+            onRescan: {}
+        ).body
+    }
 }
 
 private actor FakeScanningService: ScanningServicing {

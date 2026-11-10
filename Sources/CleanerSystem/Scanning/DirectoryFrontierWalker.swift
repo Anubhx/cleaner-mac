@@ -4,6 +4,7 @@ import CleanerCore
 
 struct FrontierWalkState {
     var pending: [URL]
+    var pendingHead: Int = 0
     var candidates: [ScannedItem]
     var deadItems: [ScannedItem]
     var visited: Set<String>
@@ -11,6 +12,24 @@ struct FrontierWalkState {
     var bytesEvaluated: UInt64
     let startedAt: Date
     let configuration: ScanConfiguration
+
+    var remainingPendingCount: Int { max(0, pending.count - pendingHead) }
+    var hasPendingDirectories: Bool { pendingHead < pending.count }
+    var peekNextDirectory: URL? { hasPendingDirectories ? pending[pendingHead] : nil }
+
+    mutating func enqueueDirectory(_ url: URL) {
+        pending.append(url)
+    }
+
+    mutating func popNextDirectory() -> URL {
+        let next = pending[pendingHead]
+        pendingHead += 1
+        if pendingHead >= 4096 {
+            pending.removeFirst(pendingHead)
+            pendingHead = 0
+        }
+        return next
+    }
 
     init(from checkpoint: ScanCheckpoint) {
         self.pending = checkpoint.pendingDirectories
@@ -26,7 +45,7 @@ struct FrontierWalkState {
     func makeCheckpoint() -> ScanCheckpoint {
         ScanCheckpoint(
             configuration: configuration,
-            pendingDirectories: pending,
+            pendingDirectories: Array(pending[pendingHead...]),
             candidateFiles: candidates,
             deadItems: deadItems,
             visitedDirectoryPaths: visited,
@@ -78,10 +97,7 @@ enum DirectoryFrontierWalker {
         .contentModificationDateKey,
         .creationDateKey,
         .contentAccessDateKey,
-        .linkCountKey,
         .isUbiquitousItemKey,
-        .ubiquitousItemDownloadingStatusKey,
-        .contentTypeKey,
     ]
 
     static func isExplicitLibraryRoot(configuration: ScanConfiguration, userLibraryPath: String) -> Bool {
@@ -91,12 +107,15 @@ enum DirectoryFrontierWalker {
         }
     }
 
-    static func userLibraryPath(configuration: ScanConfiguration, safetyGuard: SafetyGuard) -> String {
-        let userLibraryURL = (configuration.libraryOverride
+    static func userLibraryURL(configuration: ScanConfiguration, safetyGuard: SafetyGuard) -> URL {
+        (configuration.libraryOverride
             ?? (configuration.homeOverride ?? safetyGuard.currentUserHome)
                 .appendingPathComponent("Library", isDirectory: true))
             .standardizedFileURL
-        return SafetyGuard.canonicalizeFirmlink(userLibraryURL.path(percentEncoded: false))
+    }
+
+    static func userLibraryPath(configuration: ScanConfiguration, safetyGuard: SafetyGuard) -> String {
+        SafetyGuard.canonicalizeFirmlink(userLibraryURL(configuration: configuration, safetyGuard: safetyGuard).path(percentEncoded: false))
     }
 
     static func isInsideUserLibrary(_ path: String, userLibraryPath: String) -> Bool {
@@ -124,7 +143,21 @@ enum DirectoryFrontierWalker {
         let dirCanonical = SafetyGuard.canonicalizeFirmlink(directory.standardizedFileURL.path(percentEncoded: false))
         let inUserLibrary = !explicitLib && isInsideUserLibrary(dirCanonical, userLibraryPath: libPath)
 
-        if children.isEmpty && config.categories.contains(.deadFiles) && !inUserLibrary {
+        // macOS sets UF_HIDDEN on ~/Library; ensure it still enters frontier even when skipHiddenFiles is enabled.
+        let libURL = userLibraryURL(configuration: config, safetyGuard: safetyGuard)
+        let libParentCanonical = SafetyGuard.canonicalizeFirmlink(libURL.deletingLastPathComponent().path(percentEncoded: false))
+        var enqueuedHiddenLibrary = false
+        if !explicitLib && dirCanonical == libParentCanonical && !state.visited.contains(libPath) {
+            if !state.pending[state.pendingHead...].contains(where: { $0.standardizedFileURL == libURL }),
+               let libVals = try? libURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+               libVals.isDirectory == true,
+               libVals.isSymbolicLink != true {
+                state.enqueueDirectory(libURL)
+                enqueuedHiddenLibrary = true
+            }
+        }
+
+        if children.isEmpty && !enqueuedHiddenLibrary && config.categories.contains(.deadFiles) && !inUserLibrary {
             recordEmptyDirectoryIfEligible(directory, state: &state, safetyGuard: safetyGuard, batchBuffer: &batchBuffer)
             return
         }
@@ -143,15 +176,21 @@ enum DirectoryFrontierWalker {
                 if EmptyDirectoryPolicy.shouldInspectDirectory(
                     name: child.lastPathComponent,
                     isPackage: values.isPackage ?? false,
-                    isHidden: values.isHidden ?? false
+                    isHidden: (values.isHidden ?? false) && childCanonical != libPath
                 ) {
-                    state.pending.append(child)
+                    state.enqueueDirectory(child)
                 }
                 continue
             }
 
             guard values.isRegularFile == true else { continue }
-            recordRegularFile(child, values: values, state: &state, batchBuffer: &batchBuffer)
+            recordRegularFile(
+                child,
+                values: values,
+                inUserLibrary: inUserLibrary,
+                state: &state,
+                batchBuffer: &batchBuffer
+            )
         }
     }
 
@@ -209,15 +248,26 @@ enum DirectoryFrontierWalker {
     private static func recordRegularFile(
         _ fileURL: URL,
         values: URLResourceValues,
+        inUserLibrary: Bool,
         state: inout FrontierWalkState,
         batchBuffer: inout [ScannedItem]
     ) {
         let size = UInt64(max(0, values.fileSize ?? 0))
         let allocated = UInt64(max(0, values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? values.fileSize ?? 0))
-        let dataless = FilesystemProbes.isCloudDataless(values: values)
+        var dataless = false
+        if values.isUbiquitousItem == true,
+           let cloudVals = try? fileURL.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]) {
+            dataless = cloudVals.ubiquitousItemDownloadingStatus == .notDownloaded
+        }
         let physicalBytes = dataless ? 0 : min(size, allocated)
         state.scannedCount += 1
         state.bytesEvaluated &+= physicalBytes
+
+        let isLargeFile = state.configuration.categories.contains(.largeFiles)
+            && physicalBytes >= state.configuration.largeFileThresholdBytes
+        if inUserLibrary && !isLargeFile {
+            return
+        }
 
         let item = ScannedItem(
             url: fileURL,
@@ -229,14 +279,13 @@ enum DirectoryFrontierWalker {
             createdDate: values.creationDate,
             accessedDate: values.contentAccessDate,
             category: .largeFiles,
-            inode: FilesystemProbes.inodeIdentity(for: fileURL),
-            linkCount: values.linkCount ?? 1,
+            inode: nil,
+            linkCount: 1,
             isCloudDataless: dataless,
-            contentTypeIdentifier: values.contentType?.identifier
+            contentTypeIdentifier: nil
         )
         state.candidates.append(item)
-        if state.configuration.categories.contains(.largeFiles)
-            && physicalBytes >= state.configuration.largeFileThresholdBytes {
+        if isLargeFile {
             batchBuffer.append(item)
         }
     }

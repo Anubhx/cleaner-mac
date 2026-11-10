@@ -86,6 +86,18 @@ public final class CleanerWorkspaceStore {
         return nil
     }
 
+    public var hasCompletedOrCancelledScan: Bool {
+        progress.phase == .completed || progress.phase == .cancelled
+    }
+
+    public var primaryScanActionTitle: String {
+        hasCompletedOrCancelledScan ? "Scan Again" : "Scan Mac"
+    }
+
+    public var primaryScanActionSymbol: String {
+        hasCompletedOrCancelledScan ? "arrow.clockwise" : "magnifyingglass"
+    }
+
     public var visibleItems: [ScannedItem] {
         guard let category = activeCategory else { return [] }
         let base = items(for: category)

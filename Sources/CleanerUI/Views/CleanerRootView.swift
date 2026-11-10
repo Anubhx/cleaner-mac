@@ -132,7 +132,8 @@ public struct CleanerRootView: View {
                     isPaused: store.isPaused,
                     onPause: { Task { await store.pauseScan() } },
                     onResume: { Task { await store.resumeScan() } },
-                    onCancel: { Task { await store.cancelScan() } }
+                    onCancel: { Task { await store.cancelScan() } },
+                    onRescan: { Task { await store.startScan() } }
                 )
             }
             .padding(CleanerSpacing.sm)
@@ -235,9 +236,16 @@ public struct CleanerRootView: View {
                 Button {
                     Task { await store.startScan() }
                 } label: {
-                    Label("Scan Mac", systemImage: "magnifyingglass")
+                    HStack(spacing: CleanerSpacing.xxs + 2) {
+                        Image(systemName: store.primaryScanActionSymbol)
+                        Text(store.primaryScanActionTitle)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .help(store.hasCompletedOrCancelledScan
+                      ? "Run a fresh scan across your selected folders (Cmd+R)"
+                      : "Scan your Mac for duplicates, large files, old files, and leftovers (Cmd+R)")
+                .accessibilityLabel(store.primaryScanActionTitle)
             }
 
             Button {

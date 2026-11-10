@@ -34,7 +34,7 @@ struct CleanerMacApp: App {
             CommandGroup(replacing: .newItem) {}
 
             CommandMenu("Scan") {
-                Button(store.isScanning ? "Scanning…" : "Start Full Scan") {
+                Button(store.isScanning ? "Scanning…" : store.primaryScanActionTitle) {
                     Task { await store.startScan() }
                 }
                 .keyboardShortcut("r", modifiers: .command)

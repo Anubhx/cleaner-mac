@@ -122,6 +122,7 @@ public struct BackgroundScanHUD: View {
     let onPause: () -> Void
     let onResume: () -> Void
     let onCancel: () -> Void
+    let onRescan: (() -> Void)?
 
     public init(
         progress: ScanProgress,
@@ -129,7 +130,8 @@ public struct BackgroundScanHUD: View {
         isPaused: Bool,
         onPause: @escaping () -> Void,
         onResume: @escaping () -> Void,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
+        onRescan: (() -> Void)? = nil
     ) {
         self.progress = progress
         self.isScanning = isScanning
@@ -137,6 +139,7 @@ public struct BackgroundScanHUD: View {
         self.onPause = onPause
         self.onResume = onResume
         self.onCancel = onCancel
+        self.onRescan = onRescan
     }
 
     public var body: some View {
@@ -190,6 +193,18 @@ public struct BackgroundScanHUD: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+
+            if !isScanning, progress.phase == .completed || progress.phase == .cancelled, let onRescan {
+                Button(action: onRescan) {
+                    Label("Scan Again", systemImage: "arrow.clockwise")
+                        .font(CleanerTypography.caption)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Run a fresh background scan (Cmd+R)")
+                .accessibilityLabel("Scan Again")
             }
         }
         .padding(CleanerSpacing.sm)

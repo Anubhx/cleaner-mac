@@ -10,7 +10,7 @@
   - **Duplicates:** Multi-stage detection (`size bucketing -> head/tail 4 KB digest -> partial sample -> full streaming SHA-256`) with hard-link `(st_dev, st_ino)` deduplication and automatic **Keep Original** protection on the canonical copy.
   - **Large Files:** Configurable size threshold across your chosen roots and non-sensitive app containers (`APFS` physical allocated and logical sizes displayed, accurately handling sparse virtual disks).
   - **Old Files:** Configurable inactivity threshold measured by **Last Accessed or Modified** (or **Last Modified Only**).
-  - **Dead & Leftover Files:** Orphaned app data verified via dotted bundle-ID lineage, stale (`>= 30 days`) and heavy active (`>= 50 MB`) third-party `~/Library/Caches`, rebuildable developer/package caches (`.npm/_cacache`, `.gradle/caches`, `.pnpm-store`, `.bun`, `.cache`, `Xcode DerivedData`, `iOS DeviceSupport`), partial downloads past 24 hours, and empty directories.
+  - **Dead & Leftover Files:** Orphaned app data verified via dotted bundle-ID lineage, stale (`>= 30 days`) and heavy active (`>= 50 MB`) third-party `~/Library/Caches`, rebuildable developer/package caches (`.npm/_cacache`, `.npm/_npx`, `.gradle/caches`, `.pnpm-store`, `.bun`, `.cache`, `Xcode DerivedData`, `iOS DeviceSupport`), partial downloads past 24 hours, and empty directories.
 - **Live Volume Capacity & Background Scan HUD**
   - Sidebar displays real macOS volume usage (`used`, `free`, percentage full) alongside live `.utility`-priority background scan progress with **Pause**, **Resume**, and **Cancel**.
 - **All-Type Live Preview Inspector**
@@ -91,7 +91,7 @@ To inspect protected user containers (`~/Library/Containers`, Mail/Safari caches
 
 | Action | Shortcut |
 | :--- | :--- |
-| Start Full Scan | `Cmd+R` |
+| Start Full Scan / Scan Again | `Cmd+R` |
 | Pause / Resume Scan | `Cmd+Shift+P` |
 | Cancel Scan | `Cmd+.` |
 | Toggle Dry-Run Mode | `Cmd+Shift+D` |

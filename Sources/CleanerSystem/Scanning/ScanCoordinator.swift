@@ -101,7 +101,7 @@ public actor ScanCoordinator {
         var batchBuffer: [ScannedItem] = []
         var lastFlush = Date()
 
-        while !state.pending.isEmpty {
+        while state.hasPendingDirectories {
             if Task.isCancelled || isCancelRequested {
                 return cancelOutcome(state: state, buffer: batchBuffer)
             }
@@ -109,7 +109,7 @@ public actor ScanCoordinator {
                 return pauseOutcome(state: state, buffer: batchBuffer)
             }
 
-            let currentDir = state.pending.removeFirst().standardizedFileURL
+            let currentDir = state.popNextDirectory().standardizedFileURL
             if let perDirectoryDelay {
                 try? await Task.sleep(for: perDirectoryDelay)
             }
@@ -133,7 +133,7 @@ public actor ScanCoordinator {
                     currentPath: currentDir.path,
                     scannedFiles: state.scannedCount,
                     bytesEvaluated: state.bytesEvaluated,
-                    pendingDirectoriesCount: state.pending.count,
+                    pendingDirectoriesCount: state.remainingPendingCount,
                     startedAt: state.startedAt
                 )
                 emitBatch(batchBuffer, progress: progress, finishStream: false)
@@ -158,7 +158,7 @@ public actor ScanCoordinator {
             currentPath: "",
             scannedFiles: state.scannedCount,
             bytesEvaluated: state.bytesEvaluated,
-            pendingDirectoriesCount: state.pending.count,
+            pendingDirectoriesCount: state.remainingPendingCount,
             startedAt: state.startedAt
         )
         emitBatch(buffer, progress: progress, finishStream: true)
@@ -169,10 +169,10 @@ public actor ScanCoordinator {
         checkpoint = state.makeCheckpoint()
         let progress = ScanProgress(
             phase: .paused,
-            currentPath: state.pending.first?.path ?? "",
+            currentPath: state.peekNextDirectory?.path ?? "",
             scannedFiles: state.scannedCount,
             bytesEvaluated: state.bytesEvaluated,
-            pendingDirectoriesCount: state.pending.count,
+            pendingDirectoriesCount: state.remainingPendingCount,
             startedAt: state.startedAt
         )
         emitBatch(buffer, progress: progress, finishStream: false)

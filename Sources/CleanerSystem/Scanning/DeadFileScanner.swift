@@ -156,6 +156,7 @@ public enum DeadFileScanner {
     ) -> [ScannedItem] {
         var candidates: [(url: URL, displayName: String, isParentOfSubcaches: Bool)] = [
             (homeRoot.appendingPathComponent(".npm/_cacache", isDirectory: true), "npm Package Cache (.npm/_cacache)", false),
+            (homeRoot.appendingPathComponent(".npm/_npx", isDirectory: true), "npm npx Cache (.npm/_npx)", false),
             (homeRoot.appendingPathComponent(".gradle/caches", isDirectory: true), "Gradle Build Cache (.gradle/caches)", false),
             (homeRoot.appendingPathComponent(".pnpm-store", isDirectory: true), "pnpm Content Store (.pnpm-store)", false),
             (homeRoot.appendingPathComponent(".bun/install/cache", isDirectory: true), "Bun Package Cache", false),
