@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "animation-patterns": {
+      "source": "rshankras/claude-code-apple-skills",
+      "sourceType": "github",
+      "skillPath": "skills/design/animation-patterns/SKILL.md",
+      "computedHash": "c02d7ae23a11788f974c234981f55030e2eb536a07e6ccb82b6a8eae0b23d39e"
+    },
     "build-macos-apps": {
       "source": "glittercowboy/taches-cc-resources",
       "sourceType": "github",
@@ -20,6 +26,12 @@
       "sourceType": "github",
       "skillPath": "skills/software-architecture/SKILL.md",
       "computedHash": "e8546ee8fcde3e84c5c372fcb93df68c07d3f0111942555514bbd7f851e20aa2"
+    },
+    "swiftui-expert-skill": {
+      "source": "AvdLee/SwiftUI-Agent-Skill",
+      "sourceType": "github",
+      "skillPath": "skills/swiftui-expert-skill/SKILL.md",
+      "computedHash": "b8f57fdb06ccc7c2a70c3836dc96b38408ca2d84c977a0b6804dc68f752289db"
     },
     "tdd-workflow": {
       "source": "affaan-m/everything-claude-code",
