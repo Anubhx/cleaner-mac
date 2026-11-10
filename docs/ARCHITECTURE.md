@@ -139,6 +139,7 @@ cleaner-mac/
 │   │   └── ci.yml
 │   └── pull_request_template.md
 ├── Resources/
+│   ├── CleanerMac.entitlements
 │   ├── CleanerMac.icns
 │   └── Info.plist
 ├── Sources/
@@ -181,6 +182,7 @@ cleaner-mac/
 │   ├── SAFETY_RULES.md
 │   └── TEST_PLAN.md
 ├── scripts/
+│   ├── notarize-app.sh
 │   ├── package-app.sh
 │   └── run-tests.sh
 ├── Package.swift

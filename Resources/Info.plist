@@ -40,6 +40,8 @@
     <string>CleanerMac scans your Downloads folder to find duplicate files, old files, and stalled or incomplete downloads you may want to move to the Trash.</string>
     <key>NSRemovableVolumesUsageDescription</key>
     <string>CleanerMac scans removable drives only when you explicitly add a folder from an external volume to Scan Roots to find duplicate, large, or old files.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>CleanerMac scans network shares only when you explicitly add a folder from a mounted network volume to Scan Roots to find duplicate, large, or old files.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Anubhav Raj. All rights reserved.</string>
 </dict>
