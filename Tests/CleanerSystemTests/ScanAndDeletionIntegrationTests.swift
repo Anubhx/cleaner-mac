@@ -726,5 +726,327 @@ struct ScanAndDeletionIntegrationTests {
         #expect(phases.contains(.paused))
         #expect(phases.last == .cancelled)
     }
+
+    @Test("Continues degraded read-only scan cleanly and counts permission-denied directories")
+    func degradedScanSkipsUnreadableDirectoriesCleanly() async throws {
+        let sandbox = try makeSandbox()
+        let lockedDir = sandbox.appendingPathComponent("ProtectedContainer", isDirectory: true)
+        let readableDir = sandbox.appendingPathComponent("ReadableDocs", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: readableDir, withIntermediateDirectories: true)
+
+        let readableFile = readableDir.appendingPathComponent("archive.dmg")
+        try Data(repeating: 0x33, count: 16_384).write(to: readableFile)
+        try Data(repeating: 0x44, count: 16_384).write(to: lockedDir.appendingPathComponent("hidden.dmg"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedDir.path)
+        defer {
+            _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedDir.path)
+            try? FileManager.default.removeItem(at: sandbox)
+        }
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            categories: [.largeFiles],
+            largeFileThresholdBytes: 8_192
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        let foundURLs = Set(outcome.items(in: .largeFiles).map(\.url))
+        #expect(!outcome.wasCancelled)
+        #expect(outcome.progress.phase == .completed)
+        #expect(outcome.progress.skippedProtectedDirectories >= 1)
+        #expect(foundURLs.contains(readableFile.standardizedFileURL))
+    }
+
+    @Test("Pause and resume preserve skippedProtectedDirectories parity with uninterrupted scan")
+    func pauseAndResumePreservesSkippedProtectedDirectories() async throws {
+        let sandbox = try makeSandbox()
+        let lockedEarly = sandbox.appendingPathComponent("locked-early", isDirectory: true)
+        let slowRoot = sandbox.appendingPathComponent("slow-root", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedEarly, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: slowRoot, withIntermediateDirectories: true)
+
+        var chain = slowRoot
+        for depth in 0..<6 {
+            chain = chain.appendingPathComponent("level-\(depth)", isDirectory: true)
+            try FileManager.default.createDirectory(at: chain, withIntermediateDirectories: true)
+            try Data(repeating: 0x05, count: 4096).write(to: chain.appendingPathComponent("file.dat"))
+        }
+        let lockedLate = chain.appendingPathComponent("locked-late", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedLate, withIntermediateDirectories: true)
+
+        for i in 0..<18 {
+            let sibling = slowRoot.appendingPathComponent("branch-\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+            try Data(repeating: 0x06, count: 4096).write(to: sibling.appendingPathComponent("payload.dat"))
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedEarly.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedLate.path)
+        defer {
+            _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedEarly.path)
+            _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedLate.path)
+            try? FileManager.default.removeItem(at: sandbox)
+        }
+
+        let config = ScanConfiguration(
+            roots: [lockedEarly, slowRoot],
+            categories: [.largeFiles],
+            largeFileThresholdBytes: 1024
+        )
+        let baselineCoordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let baseline = await baselineCoordinator.runFullScan(configuration: config)
+        #expect(baseline.progress.skippedProtectedDirectories == 2)
+
+        let pausedCoordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(8)
+        )
+        let stream = await pausedCoordinator.makeProgressStream()
+        let (enteredSignalStream, enteredContinuation) = AsyncStream.makeStream(of: Void.self)
+        let signalTask = Task {
+            for await batch in stream {
+                if batch.progress.phase == .enumerating {
+                    enteredContinuation.yield(())
+                    enteredContinuation.finish()
+                    break
+                }
+            }
+            enteredContinuation.finish()
+        }
+
+        try await pausedCoordinator.start(configuration: config)
+        for await _ in enteredSignalStream { break }
+        signalTask.cancel()
+
+        let checkpoint = await pausedCoordinator.pause()
+        #expect(!checkpoint.pendingDirectories.isEmpty)
+        #expect(checkpoint.skippedProtectedDirectories >= 1)
+
+        let resumed = await pausedCoordinator.resume(from: checkpoint)
+        #expect(resumed.progress.skippedProtectedDirectories == baseline.progress.skippedProtectedDirectories)
+    }
+
+    @Test("Cancelling a paused scan preserves skippedProtectedDirectories count")
+    func cancelWhilePausedPreservesSkippedProtectedDirectories() async throws {
+        let sandbox = try makeSandbox()
+        let lockedEarly = sandbox.appendingPathComponent("locked-early", isDirectory: true)
+        let slowRoot = sandbox.appendingPathComponent("slow-root", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedEarly, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: slowRoot, withIntermediateDirectories: true)
+
+        for i in 0..<24 {
+            let folder = slowRoot.appendingPathComponent("folder-\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(repeating: 0x07, count: 2048).write(to: folder.appendingPathComponent("data.bin"))
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedEarly.path)
+        defer {
+            _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedEarly.path)
+            try? FileManager.default.removeItem(at: sandbox)
+        }
+
+        let config = ScanConfiguration(
+            roots: [lockedEarly, slowRoot],
+            categories: [.largeFiles],
+            largeFileThresholdBytes: 512
+        )
+        let coordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(8)
+        )
+        let stream = await coordinator.makeProgressStream()
+        let (enteredSignalStream, enteredContinuation) = AsyncStream.makeStream(of: Void.self)
+        let collectorTask = Task<[ScanBatch], Never> {
+            var batches: [ScanBatch] = []
+            var signaled = false
+            for await batch in stream {
+                batches.append(batch)
+                if !signaled && batch.progress.phase == .enumerating {
+                    signaled = true
+                    enteredContinuation.yield(())
+                    enteredContinuation.finish()
+                }
+            }
+            enteredContinuation.finish()
+            return batches
+        }
+
+        try await coordinator.start(configuration: config)
+        for await _ in enteredSignalStream { break }
+        let checkpoint = await coordinator.pause()
+        #expect(!checkpoint.pendingDirectories.isEmpty)
+
+        let cancelledOutcome = await coordinator.cancel()
+        let batches = await collectorTask.value
+        #expect(cancelledOutcome.wasCancelled == true)
+        #expect(cancelledOutcome.progress.skippedProtectedDirectories == 1)
+        #expect(batches.last?.progress.phase == .cancelled)
+        #expect(batches.last?.progress.skippedProtectedDirectories == 1)
+    }
+
+    @Test("DeadFileScanner counts protected directories outside frontier walk without double-counting")
+    func deadFileScannerCountsProtectedDirectoriesAccurately() async throws {
+        let sandbox = try makeSandbox()
+        let appsRoot = sandbox.appendingPathComponent("Applications", isDirectory: true)
+        let installedContents = appsRoot.appendingPathComponent("KeepApp.app/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: installedContents, withIntermediateDirectories: true)
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.KeepApp</string></dict></plist>
+        """
+        try Data(plist.utf8).write(to: installedContents.appendingPathComponent("Info.plist"))
+
+        let docs = sandbox.appendingPathComponent("Documents", isDirectory: true)
+        let downloads = sandbox.appendingPathComponent("Downloads", isDirectory: true)
+        let library = sandbox.appendingPathComponent("Library", isDirectory: true)
+        let caches = library.appendingPathComponent("Caches", isDirectory: true)
+        let lockedCacheEntry = caches.appendingPathComponent("com.example.LockedCache", isDirectory: true)
+        let logs = library.appendingPathComponent("Logs", isDirectory: true)
+        let dotCache = sandbox.appendingPathComponent(".cache", isDirectory: true)
+        let dotNpm = sandbox.appendingPathComponent(".npm", isDirectory: true)
+        let developer = library.appendingPathComponent("Developer", isDirectory: true)
+        let derivedData = developer.appendingPathComponent("Xcode/DerivedData", isDirectory: true)
+
+        for dir in [docs, downloads, lockedCacheEntry, logs, dotCache, dotNpm, derivedData] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try Data("doc".utf8).write(to: docs.appendingPathComponent("note.txt"))
+        try Data("cache".utf8).write(to: lockedCacheEntry.appendingPathComponent("blob.bin"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: downloads.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedCacheEntry.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: logs.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dotCache.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dotNpm.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: developer.path)
+
+        defer {
+            for dir in [downloads, lockedCacheEntry, logs, dotCache, dotNpm, developer] {
+                _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            }
+            try? FileManager.default.removeItem(at: sandbox)
+        }
+
+        // Case 1: Scan roots only cover Documents; ALL 6 protected dirs are only reachable via DeadFileScanner
+        let deadOnlyConfig = ScanConfiguration(
+            roots: [docs],
+            downloadsOverride: downloads,
+            libraryOverride: library,
+            appSearchRootsOverride: [appsRoot],
+            homeOverride: sandbox,
+            categories: [.deadFiles]
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let deadOnlyOutcome = await coordinator.runFullScan(configuration: deadOnlyConfig)
+        #expect(deadOnlyOutcome.progress.skippedProtectedDirectories == 6)
+
+        // Case 2: Full sandbox walk covers Downloads & Developer in frontier, while Caches/Logs/.cache/.npm are DeadFileScanner-only.
+        // Total unique protected directories must still be 6 (zero double-counting).
+        let fullConfig = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: downloads,
+            libraryOverride: library,
+            appSearchRootsOverride: [appsRoot],
+            homeOverride: sandbox,
+            categories: [.largeFiles, .deadFiles]
+        )
+        let fullOutcome = await coordinator.runFullScan(configuration: fullConfig)
+        #expect(fullOutcome.progress.skippedProtectedDirectories == 6)
+    }
+
+    @Test("DeadFileScanner ignores missing ENOENT directories when counting protected folders")
+    func deadFileScannerIgnoresMissingDirectories() async throws {
+        let sandbox = try makeSandbox()
+        let docs = sandbox.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let config = ScanConfiguration(
+            roots: [docs],
+            downloadsOverride: sandbox.appendingPathComponent("MissingDownloads"),
+            libraryOverride: sandbox.appendingPathComponent("MissingLibrary"),
+            appSearchRootsOverride: [sandbox.appendingPathComponent("MissingApps")],
+            homeOverride: sandbox,
+            categories: [.deadFiles]
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+        #expect(outcome.progress.skippedProtectedDirectories == 0)
+    }
+
+    @Test("DeadFileScanner counts nested protected subdirectories inside readable cache directories")
+    func deadFileScannerCountsNestedProtectedSubdirsInsideReadableCaches() async throws {
+        let sandbox = try makeSandbox()
+        let library = sandbox.appendingPathComponent("Library", isDirectory: true)
+        let cacheApp = library.appendingPathComponent("Caches/com.example.NestedLock", isDirectory: true)
+        let lockedNested = cacheApp.appendingPathComponent("RestrictedSlice", isDirectory: true)
+        let readableNested = cacheApp.appendingPathComponent("OpenSlice", isDirectory: true)
+        let docs = sandbox.appendingPathComponent("Documents", isDirectory: true)
+
+        for dir in [lockedNested, readableNested, docs] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try Data(repeating: 0x19, count: 16_384).write(to: readableNested.appendingPathComponent("payload.cache"))
+        try Data(repeating: 0x20, count: 8_192).write(to: lockedNested.appendingPathComponent("hidden.cache"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedNested.path)
+        defer {
+            _ = try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedNested.path)
+            try? FileManager.default.removeItem(at: sandbox)
+        }
+
+        let config = ScanConfiguration(
+            roots: [docs],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: library,
+            appSearchRootsOverride: [sandbox.appendingPathComponent("Apps")],
+            homeOverride: sandbox,
+            categories: [.deadFiles],
+            minimumActiveCacheBytes: 8_192
+        )
+        let coordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
+        let outcome = await coordinator.runFullScan(configuration: config)
+
+        let staleCacheFound = outcome.items(in: .deadFiles).contains {
+            $0.url == cacheApp.standardizedFileURL && $0.deadKind == .staleCache
+        }
+        #expect(staleCacheFound)
+        #expect(outcome.progress.skippedProtectedDirectories == 1)
+    }
+
+    @Test("ScanCheckpoint preserves skippedProtectedDirectories across Codable roundtrip and legacy JSON")
+    func scanCheckpointCodablePreservesAndBackfillsSkippedCount() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let checkpoint = ScanCheckpoint(
+            configuration: ScanConfiguration(roots: [URL(fileURLWithPath: "/tmp")]),
+            pendingDirectories: [URL(fileURLWithPath: "/tmp/next")],
+            candidateFiles: [],
+            deadItems: [],
+            visitedDirectoryPaths: ["/tmp/locked"],
+            scannedFiles: 14,
+            bytesEvaluated: 32_768,
+            skippedProtectedDirectories: 4,
+            startedAt: now
+        )
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let encoded = try encoder.encode(checkpoint)
+        let decoded = try decoder.decode(ScanCheckpoint.self, from: encoded)
+        #expect(decoded.skippedProtectedDirectories == 4)
+
+        var legacyObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        legacyObject?.removeValue(forKey: "skippedProtectedDirectories")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject as Any)
+        let decodedLegacy = try decoder.decode(ScanCheckpoint.self, from: legacyData)
+        #expect(decodedLegacy.skippedProtectedDirectories == 0)
+        #expect(decodedLegacy.scannedFiles == 14)
+        #expect(decodedLegacy.visitedDirectoryPaths == ["/tmp/locked"])
+    }
 }
 

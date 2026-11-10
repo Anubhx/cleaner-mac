@@ -21,7 +21,7 @@ Respect these dependency arrows in every change (`docs/ARCHITECTURE.md`).
 ## Development Setup
 
 ### Prerequisites
-- macOS 14.0 (Sonoma) or newer (Apple Silicon or Intel)
+- macOS 14.0 (Sonoma) or newer (Apple Silicon / `arm64` only)
 - Swift 6.0+ toolchain (either full Xcode 16+ or Apple Command Line Tools)
 
 ### Running Tests

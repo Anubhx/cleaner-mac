@@ -103,6 +103,7 @@ public actor ScanCoordinator {
                 scannedFiles: $0.scannedFiles,
                 bytesEvaluated: $0.bytesEvaluated,
                 pendingDirectoriesCount: $0.pendingDirectories.count,
+                skippedProtectedDirectories: $0.skippedProtectedDirectories,
                 startedAt: $0.startedAt
             )
         } ?? ScanProgress(phase: .cancelled)
@@ -123,6 +124,7 @@ public actor ScanCoordinator {
                         scannedFiles: outcome.progress.scannedFiles,
                         bytesEvaluated: outcome.progress.bytesEvaluated,
                         pendingDirectoriesCount: outcome.progress.pendingDirectoriesCount,
+                        skippedProtectedDirectories: outcome.progress.skippedProtectedDirectories,
                         startedAt: outcome.progress.startedAt
                     )
                     emitBatch([], progress: cancelledProgress, finishStream: true)
@@ -263,6 +265,7 @@ public actor ScanCoordinator {
                     scannedFiles: state.scannedCount,
                     bytesEvaluated: state.bytesEvaluated,
                     pendingDirectoriesCount: state.remainingPendingCount,
+                    skippedProtectedDirectories: state.skippedProtectedDirectories,
                     startedAt: state.startedAt
                 )
                 await coordinator?.emitBatchIfCurrent(generation: control.generation, items: batchBuffer, progress: progress, finishStream: false)
@@ -311,6 +314,7 @@ public actor ScanCoordinator {
             scannedFiles: state.scannedCount,
             bytesEvaluated: state.bytesEvaluated,
             pendingDirectoriesCount: state.remainingPendingCount,
+            skippedProtectedDirectories: state.skippedProtectedDirectories,
             startedAt: state.startedAt
         )
         let outcome = ScanOutcome(progress: progress, wasCancelled: true)
@@ -331,6 +335,7 @@ public actor ScanCoordinator {
             scannedFiles: state.scannedCount,
             bytesEvaluated: state.bytesEvaluated,
             pendingDirectoriesCount: state.remainingPendingCount,
+            skippedProtectedDirectories: state.skippedProtectedDirectories,
             startedAt: state.startedAt
         )
         await coordinator?.recordPausedRun(generation: generation, checkpoint: saved, buffer: buffer, progress: progress)
@@ -351,6 +356,7 @@ public actor ScanCoordinator {
         var byCategory: [ScanCategory: [ScannedItem]] = [:]
         var duplicateGroups: [DuplicateGroup] = []
         var totalEvaluatedBytes = state.bytesEvaluated
+        var totalSkippedProtected = state.skippedProtectedDirectories
 
         if !Task.isCancelled && !control.isCancelled && config.categories.contains(.largeFiles) {
             byCategory[.largeFiles] = CategoryClassifier.largeFiles(
@@ -367,11 +373,12 @@ public actor ScanCoordinator {
             )
         }
         if !Task.isCancelled && !control.isCancelled && config.categories.contains(.deadFiles) {
-            let dead = CategoryClassifier.deadFiles(
+            let deadClassification = CategoryClassifier.deadFilesWithDiagnostics(
                 emptyDirectories: state.deadItems,
                 configuration: config,
                 safetyGuard: safetyGuard
             )
+            let dead = deadClassification.items
             byCategory[.deadFiles] = dead
             let extraDeadBytes = dead
                 .filter { item in
@@ -386,6 +393,7 @@ public actor ScanCoordinator {
                 }
                 .reduce(0) { $0 &+ $1.reclaimableDiskBytes }
             totalEvaluatedBytes &+= extraDeadBytes
+            totalSkippedProtected += deadClassification.skippedProtectedDirectoryPaths.subtracting(state.visited).count
         }
         if !Task.isCancelled && !control.isCancelled && config.categories.contains(.duplicates) {
             let hashProgress = ScanProgress(
@@ -394,6 +402,7 @@ public actor ScanCoordinator {
                 scannedFiles: state.scannedCount,
                 bytesEvaluated: totalEvaluatedBytes,
                 pendingDirectoriesCount: 0,
+                skippedProtectedDirectories: totalSkippedProtected,
                 startedAt: state.startedAt
             )
             await coordinator?.emitBatchIfCurrent(generation: control.generation, items: [], progress: hashProgress, finishStream: false)
@@ -418,6 +427,7 @@ public actor ScanCoordinator {
             scannedFiles: state.scannedCount,
             bytesEvaluated: totalEvaluatedBytes,
             pendingDirectoriesCount: 0,
+            skippedProtectedDirectories: totalSkippedProtected,
             startedAt: state.startedAt
         )
         return ScanOutcome(

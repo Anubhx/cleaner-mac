@@ -15,6 +15,7 @@ public struct ScanProgress: Codable, Sendable, Equatable {
     public var scannedFiles: Int
     public var bytesEvaluated: UInt64
     public var pendingDirectoriesCount: Int
+    public var skippedProtectedDirectories: Int
     public var startedAt: Date
 
     public init(
@@ -23,6 +24,7 @@ public struct ScanProgress: Codable, Sendable, Equatable {
         scannedFiles: Int = 0,
         bytesEvaluated: UInt64 = 0,
         pendingDirectoriesCount: Int = 0,
+        skippedProtectedDirectories: Int = 0,
         startedAt: Date = Date()
     ) {
         self.phase = phase
@@ -30,7 +32,29 @@ public struct ScanProgress: Codable, Sendable, Equatable {
         self.scannedFiles = scannedFiles
         self.bytesEvaluated = bytesEvaluated
         self.pendingDirectoriesCount = pendingDirectoriesCount
+        self.skippedProtectedDirectories = skippedProtectedDirectories
         self.startedAt = startedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case phase
+        case currentPath
+        case scannedFiles
+        case bytesEvaluated
+        case pendingDirectoriesCount
+        case skippedProtectedDirectories
+        case startedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.phase = try container.decode(ScanPhase.self, forKey: .phase)
+        self.currentPath = try container.decode(String.self, forKey: .currentPath)
+        self.scannedFiles = try container.decode(Int.self, forKey: .scannedFiles)
+        self.bytesEvaluated = try container.decode(UInt64.self, forKey: .bytesEvaluated)
+        self.pendingDirectoriesCount = try container.decode(Int.self, forKey: .pendingDirectoriesCount)
+        self.skippedProtectedDirectories = try container.decodeIfPresent(Int.self, forKey: .skippedProtectedDirectories) ?? 0
+        self.startedAt = try container.decode(Date.self, forKey: .startedAt)
     }
 }
 
@@ -42,6 +66,7 @@ public struct ScanCheckpoint: Codable, Sendable, Equatable {
     public let visitedDirectoryPaths: Set<String>
     public let scannedFiles: Int
     public let bytesEvaluated: UInt64
+    public let skippedProtectedDirectories: Int
     public let startedAt: Date
 
     public init(
@@ -52,6 +77,7 @@ public struct ScanCheckpoint: Codable, Sendable, Equatable {
         visitedDirectoryPaths: Set<String>,
         scannedFiles: Int,
         bytesEvaluated: UInt64,
+        skippedProtectedDirectories: Int = 0,
         startedAt: Date
     ) {
         self.configuration = configuration
@@ -61,7 +87,33 @@ public struct ScanCheckpoint: Codable, Sendable, Equatable {
         self.visitedDirectoryPaths = visitedDirectoryPaths
         self.scannedFiles = scannedFiles
         self.bytesEvaluated = bytesEvaluated
+        self.skippedProtectedDirectories = skippedProtectedDirectories
         self.startedAt = startedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case configuration
+        case pendingDirectories
+        case candidateFiles
+        case deadItems
+        case visitedDirectoryPaths
+        case scannedFiles
+        case bytesEvaluated
+        case skippedProtectedDirectories
+        case startedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.configuration = try container.decode(ScanConfiguration.self, forKey: .configuration)
+        self.pendingDirectories = try container.decode([URL].self, forKey: .pendingDirectories)
+        self.candidateFiles = try container.decode([ScannedItem].self, forKey: .candidateFiles)
+        self.deadItems = try container.decode([ScannedItem].self, forKey: .deadItems)
+        self.visitedDirectoryPaths = try container.decode(Set<String>.self, forKey: .visitedDirectoryPaths)
+        self.scannedFiles = try container.decode(Int.self, forKey: .scannedFiles)
+        self.bytesEvaluated = try container.decode(UInt64.self, forKey: .bytesEvaluated)
+        self.skippedProtectedDirectories = try container.decodeIfPresent(Int.self, forKey: .skippedProtectedDirectories) ?? 0
+        self.startedAt = try container.decode(Date.self, forKey: .startedAt)
     }
 }
 

@@ -1,6 +1,6 @@
 # CleanerMac Architecture Overview
 
-CleanerMac is a 100% local, privacy-preserving native macOS disk-cleaning utility built with **Swift 6** and **SwiftUI**, targeting **macOS 14.0+** on Apple Silicon (M-series) and Intel Macs. It runs completely offline with zero network calls, zero analytics, and zero third-party SDK dependencies.
+CleanerMac is a 100% local, privacy-preserving native macOS disk-cleaning utility built with **Swift 6** and **SwiftUI**, targeting **macOS 14.0+** on Apple Silicon (`arm64` only). It runs completely offline with zero network calls, zero analytics, and zero third-party SDK dependencies.
 
 ---
 
@@ -139,6 +139,7 @@ cleaner-mac/
 │   │   └── ci.yml
 │   └── pull_request_template.md
 ├── Resources/
+│   ├── CleanerMac.icns
 │   └── Info.plist
 ├── Sources/
 │   ├── CleanerCore/

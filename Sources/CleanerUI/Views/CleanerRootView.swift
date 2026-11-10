@@ -38,6 +38,7 @@ public struct CleanerRootView: View {
                 }
             )
             .inspectorColumnWidth(min: 340, ideal: 380, max: 460)
+            .toolbar { inspectorToolbarItems }
         }
         .searchable(text: $store.searchQuery, placement: .toolbar, prompt: "Filter filename or path")
         .toolbar { toolbarItems }
@@ -176,22 +177,37 @@ public struct CleanerRootView: View {
             }
 
             if let banner = store.statusBannerMessage {
+                let isLimitedBanner = store.isLimitedScanBannerVisible
                 HStack(spacing: CleanerSpacing.xs) {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(Color.accentColor)
+                    Image(systemName: isLimitedBanner ? "exclamationmark.triangle.fill" : "info.circle")
+                        .foregroundStyle(isLimitedBanner ? CleanerColors.caution : Color.accentColor)
                     Text(banner)
                         .font(CleanerTypography.callout)
+                        .lineLimit(2)
                     Spacer()
+                    if isLimitedBanner {
+                        Button("Open Full Disk Access Settings…") {
+                            store.openFullDiskAccessSettings()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("Open Full Disk Access Settings")
+                        .accessibilityIdentifier("bannerOpenFullDiskAccessButton")
+                        .help("Open Privacy & Security > Full Disk Access in System Settings")
+                    }
                     Button {
                         store.statusBannerMessage = nil
                     } label: {
                         Image(systemName: "xmark")
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Dismiss status banner")
+                    .help("Dismiss banner")
                 }
                 .padding(.horizontal, CleanerSpacing.md)
                 .padding(.vertical, CleanerSpacing.xs)
                 .background(Color(nsColor: .controlBackgroundColor))
+                .accessibilityIdentifier("workspaceStatusBanner")
                 Divider()
             }
 
@@ -252,13 +268,19 @@ public struct CleanerRootView: View {
                       : "Scan your Mac for duplicates, large files, old files, and leftovers (Cmd+R)")
                 .accessibilityLabel(store.primaryScanActionTitle)
             }
+        }
+    }
 
+    @ToolbarContentBuilder
+    private var inspectorToolbarItems: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 store.isInspectorVisible.toggle()
             } label: {
                 Label("Preview Inspector", systemImage: "sidebar.right")
             }
-            .help("Toggle Preview Pane")
+            .help("Toggle Preview Pane (Cmd+Option+I)")
+            .accessibilityLabel("Preview Inspector")
         }
     }
 

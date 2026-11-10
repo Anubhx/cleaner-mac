@@ -10,15 +10,21 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 cd "$ROOT_DIR"
 
-echo "Building CleanerApp in release configuration..."
-swift build -c release --product CleanerApp
+echo "Building CleanerApp (arm64) in release configuration..."
+swift build -c release --arch arm64 --product CleanerApp
 
-BIN_PATH="$(swift build -c release --show-bin-path)"
+BIN_PATH="$(swift build -c release --arch arm64 --show-bin-path)"
 EXECUTABLE="$BIN_PATH/CleanerApp"
-RESOURCE_BUNDLE="$BIN_PATH/CleanerMac_CleanerUI.bundle"
+
+ICON_FILE="$ROOT_DIR/Resources/CleanerMac.icns"
 
 if [[ ! -f "$EXECUTABLE" ]]; then
   echo "Error: CleanerApp binary not found at $EXECUTABLE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$ICON_FILE" ]]; then
+  echo "Error: App icon not found at $ICON_FILE" >&2
   exit 1
 fi
 
@@ -28,13 +34,12 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/Fonts"
 cp "$EXECUTABLE" "$MACOS_DIR/CleanerApp"
 chmod +x "$MACOS_DIR/CleanerApp"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+cp "$ICON_FILE" "$RESOURCES_DIR/CleanerMac.icns"
+
+plutil -lint "$CONTENTS_DIR/Info.plist" >/dev/null
 
 cp "$ROOT_DIR"/Sources/CleanerUI/Resources/Fonts/*.ttf "$RESOURCES_DIR/Fonts/"
 cp "$ROOT_DIR"/Sources/CleanerUI/Resources/Fonts/OFL.txt "$RESOURCES_DIR/Fonts/"
-
-if [[ -d "$RESOURCE_BUNDLE" ]]; then
-  cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/"
-fi
 
 if command -v codesign >/dev/null 2>&1; then
   codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null

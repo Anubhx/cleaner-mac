@@ -14,6 +14,8 @@
     <string>CleanerMac</string>
     <key>CFBundleDisplayName</key>
     <string>CleanerMac</string>
+    <key>CFBundleIconFile</key>
+    <string>CleanerMac</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -30,6 +32,16 @@
     <true/>
     <key>ATSApplicationFontsPath</key>
     <string>Fonts</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>CleanerMac scans your Desktop folder to find large, old, or duplicate files and empty folders you may want to move to the Trash.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>CleanerMac scans your Documents folder to find large, old, or duplicate files and empty folders you may want to move to the Trash.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>CleanerMac scans your Downloads folder to find duplicate files, old files, and stalled or incomplete downloads you may want to move to the Trash.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>CleanerMac scans removable drives only when you explicitly add a folder from an external volume to Scan Roots to find duplicate, large, or old files.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Anubhav Raj. All rights reserved.</string>
 </dict>
 </plist>
 

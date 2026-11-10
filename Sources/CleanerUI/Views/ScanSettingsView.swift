@@ -21,8 +21,11 @@ public struct ScanSettingsView: View {
                         Text("All scanning runs locally on this Mac with zero network requests or telemetry.")
                             .font(CleanerTypography.callout)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                permissionsCard
 
                 folderSection(
                     title: "Scan Roots",
@@ -46,6 +49,82 @@ public struct ScanSettingsView: View {
             .padding(CleanerSpacing.lg)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            store.refreshPermissionStatus()
+        }
+    }
+
+    private var permissionsCard: some View {
+        let isGranted = store.permissionStatus.isGranted
+        let statusTint = isGranted ? CleanerColors.safe : CleanerColors.caution
+        let statusSymbol = isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+
+        return VStack(alignment: .leading, spacing: CleanerSpacing.sm) {
+            HStack(spacing: CleanerSpacing.xs) {
+                Image(systemName: statusSymbol)
+                    .font(CleanerTypography.headline)
+                    .foregroundStyle(statusTint)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Full Disk Access")
+                        .font(CleanerTypography.headline)
+                    Text(store.permissionStatus.summaryLabel)
+                        .font(CleanerTypography.callout)
+                        .foregroundStyle(statusTint)
+                        .accessibilityIdentifier("settingsPermissionStatusLabel")
+                }
+
+                Spacer()
+            }
+
+            Text(
+                isGranted
+                    ? "CleanerMac can inspect protected user containers, app caches, Downloads, Documents, and Desktop."
+                    : "Without Full Disk Access, protected folders are skipped safely during scans. Grant access in System Settings > Privacy & Security > Full Disk Access."
+            )
+            .font(CleanerTypography.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: CleanerSpacing.xs) {
+                if isGranted {
+                    Button {
+                        store.openFullDiskAccessSettings()
+                    } label: {
+                        Label("Open Full Disk Access Settings…", systemImage: "gear")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("settingsOpenFullDiskAccessButton")
+                    .help("Open Privacy & Security > Full Disk Access in System Settings")
+                } else {
+                    Button {
+                        store.openFullDiskAccessSettings()
+                    } label: {
+                        Label("Open Full Disk Access Settings…", systemImage: "gear")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("settingsOpenFullDiskAccessButton")
+                    .help("Open Privacy & Security > Full Disk Access in System Settings")
+                }
+
+                Button("Check Status") {
+                    store.refreshPermissionStatus()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("settingsCheckPermissionButton")
+                .help("Re-check Full Disk Access status")
+            }
+        }
+        .padding(CleanerSpacing.md)
+        .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
+        .overlay(
+            RoundedRectangle(cornerRadius: CleanerRadii.md)
+                .stroke(CleanerColors.hairline, lineWidth: 1)
+        )
+        .accessibilityIdentifier("settingsFullDiskAccessCard")
     }
 
     private func folderSection(
@@ -59,7 +138,10 @@ public struct ScanSettingsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(CleanerTypography.headline)
-                    Text(subtitle).font(CleanerTypography.caption).foregroundStyle(.secondary)
+                    Text(subtitle)
+                        .font(CleanerTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Button(action: onAdd) {
@@ -182,9 +264,11 @@ public struct ScanSettingsView: View {
             Text("Disabled by default. System roots (/System, /Library, /usr, /bin) and other users' home folders are always hard-blocked and cannot be overridden.")
                 .font(CleanerTypography.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Toggle("Skip Hidden Files During Scan", isOn: $store.configuration.skipHiddenFiles)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CleanerSpacing.md)
         .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
         .overlay(

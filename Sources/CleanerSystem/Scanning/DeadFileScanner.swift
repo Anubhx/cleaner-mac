@@ -17,6 +17,23 @@ public enum DeadFileScanner {
         safetyGuard: SafetyGuard,
         excludedFolders: [String]
     ) -> [ScannedItem] {
+        var ignored: Set<String> = []
+        return scanOrphanedAppData(
+            libraryRoot: libraryRoot,
+            installedBundleIDs: installedBundleIDs,
+            safetyGuard: safetyGuard,
+            excludedFolders: excludedFolders,
+            skippedProtectedDirectoryPaths: &ignored
+        )
+    }
+
+    static func scanOrphanedAppData(
+        libraryRoot: URL,
+        installedBundleIDs: Set<String>,
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        skippedProtectedDirectoryPaths: inout Set<String>
+    ) -> [ScannedItem] {
         guard !installedBundleIDs.isEmpty else { return [] }
 
         let fm = FileManager.default
@@ -25,11 +42,27 @@ public enum DeadFileScanner {
         for (subfolder, isAppSupport) in orphanSubfolders {
             if Task.isCancelled { return results }
             let root = libraryRoot.appendingPathComponent(subfolder, isDirectory: true)
-            guard let entries = try? fm.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .creationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+            guard safetyGuard.isScanDirectoryAllowed(root, excludedFolders: excludedFolders) else { continue }
+
+            let entries: [URL]
+            do {
+                entries = try fm.contentsOfDirectory(
+                    at: root,
+                    includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .creationDateKey],
+                    options: [.skipsHiddenFiles]
+                )
+            } catch {
+                if FilesystemProbes.isPermissionError(error) {
+                    recordProtectedDirectory(
+                        root,
+                        boundaries: [libraryRoot],
+                        safetyGuard: safetyGuard,
+                        excludedFolders: excludedFolders,
+                        into: &skippedProtectedDirectoryPaths
+                    )
+                }
+                continue
+            }
 
             for entry in entries {
                 if Task.isCancelled { return results }
@@ -39,14 +72,31 @@ public enum DeadFileScanner {
                     installedBundleIDs: installedBundleIDs
                 ) else { continue }
 
-                guard (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil,
-                      FilesystemProbes.isCleanableByCurrentProcess(entry) else {
+                guard (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil else {
                     continue
                 }
 
-                let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey, .creationDateKey])
-                let isDir = values?.isDirectory ?? true
-                let size = isDir ? FilesystemProbes.directorySize(at: entry) : 0
+                let values: URLResourceValues
+                do {
+                    values = try entry.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey, .creationDateKey])
+                } catch {
+                    if FilesystemProbes.isPermissionError(error), FilesystemProbes.isDirectoryPath(entry) {
+                        skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: entry))
+                    }
+                    continue
+                }
+
+                let isDir = values.isDirectory ?? true
+                guard FilesystemProbes.isCleanableByCurrentProcess(entry) else {
+                    if isDir && FilesystemProbes.isUnreadableProtectedDirectory(entry) {
+                        skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: entry))
+                    }
+                    continue
+                }
+
+                let size = isDir
+                    ? FilesystemProbes.directorySize(at: entry, skippedProtectedDirectoryPaths: &skippedProtectedDirectoryPaths)
+                    : 0
                 guard size > 0 else { continue }
 
                 let risk = RiskEvaluator.assess(
@@ -62,8 +112,8 @@ public enum DeadFileScanner {
                     logicalSize: size,
                     allocatedSize: size,
                     isDirectory: isDir,
-                    modifiedDate: values?.contentModificationDate,
-                    createdDate: values?.creationDate,
+                    modifiedDate: values.contentModificationDate,
+                    createdDate: values.creationDate,
                     accessedDate: nil,
                     category: .deadFiles,
                     deadKind: .orphanedAppData,
@@ -86,8 +136,31 @@ public enum DeadFileScanner {
         minimumActiveCacheBytes: UInt64 = 52_428_800,
         now: Date = Date()
     ) -> [ScannedItem] {
+        var ignored: Set<String> = []
+        return scanStaleCaches(
+            libraryRoot: libraryRoot,
+            safetyGuard: safetyGuard,
+            excludedFolders: excludedFolders,
+            staleDays: staleDays,
+            minimumActiveCacheBytes: minimumActiveCacheBytes,
+            now: now,
+            skippedProtectedDirectoryPaths: &ignored
+        )
+    }
+
+    static func scanStaleCaches(
+        libraryRoot: URL,
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        staleDays: Int = 30,
+        minimumActiveCacheBytes: UInt64 = 52_428_800,
+        now: Date = Date(),
+        skippedProtectedDirectoryPaths: inout Set<String>
+    ) -> [ScannedItem] {
         let fm = FileManager.default
         let cachesRoot = libraryRoot.appendingPathComponent("Caches", isDirectory: true)
+        guard safetyGuard.isScanDirectoryAllowed(cachesRoot, excludedFolders: excludedFolders) else { return [] }
+
         let keys: [URLResourceKey] = [
             .isDirectoryKey,
             .isSymbolicLinkKey,
@@ -96,11 +169,25 @@ public enum DeadFileScanner {
             .fileSizeKey,
             .fileAllocatedSizeKey,
         ]
-        guard let entries = try? fm.contentsOfDirectory(
-            at: cachesRoot,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
+        let entries: [URL]
+        do {
+            entries = try fm.contentsOfDirectory(
+                at: cachesRoot,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            if FilesystemProbes.isPermissionError(error) {
+                recordProtectedDirectory(
+                    cachesRoot,
+                    boundaries: [libraryRoot],
+                    safetyGuard: safetyGuard,
+                    excludedFolders: excludedFolders,
+                    into: &skippedProtectedDirectoryPaths
+                )
+            }
+            return []
+        }
 
         let cutoff = now.addingTimeInterval(-TimeInterval(staleDays) * 86_400)
         var results: [ScannedItem] = []
@@ -109,14 +196,32 @@ public enum DeadFileScanner {
             if Task.isCancelled { return results }
             let name = entry.lastPathComponent
             if name.lowercased().hasPrefix("com.apple.") { continue }
-            guard let values = try? entry.resourceValues(forKeys: Set(keys)),
-                  values.isSymbolicLink != true else { continue }
-            guard (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil,
-                  FilesystemProbes.isCleanableByCurrentProcess(entry) else { continue }
+
+            let values: URLResourceValues
+            do {
+                values = try entry.resourceValues(forKeys: Set(keys))
+            } catch {
+                if FilesystemProbes.isPermissionError(error),
+                   FilesystemProbes.isDirectoryPath(entry),
+                   (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil {
+                    skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: entry))
+                }
+                continue
+            }
+
+            guard values.isSymbolicLink != true else { continue }
+            guard (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil else { continue }
 
             let isDir = values.isDirectory ?? false
+            guard FilesystemProbes.isCleanableByCurrentProcess(entry) else {
+                if isDir && FilesystemProbes.isUnreadableProtectedDirectory(entry) {
+                    skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: entry))
+                }
+                continue
+            }
+
             let size = isDir
-                ? FilesystemProbes.directorySize(at: entry)
+                ? FilesystemProbes.directorySize(at: entry, skippedProtectedDirectoryPaths: &skippedProtectedDirectoryPaths)
                 : UInt64(max(0, values.fileAllocatedSize ?? values.fileSize ?? 0))
             guard size > 0 else { continue }
 
@@ -157,6 +262,25 @@ public enum DeadFileScanner {
         excludedFolders: [String],
         minimumBytes: UInt64 = 10_485_760
     ) -> [ScannedItem] {
+        var ignored: Set<String> = []
+        return scanDeveloperCaches(
+            homeRoot: homeRoot,
+            libraryRoot: libraryRoot,
+            safetyGuard: safetyGuard,
+            excludedFolders: excludedFolders,
+            minimumBytes: minimumBytes,
+            skippedProtectedDirectoryPaths: &ignored
+        )
+    }
+
+    static func scanDeveloperCaches(
+        homeRoot: URL,
+        libraryRoot: URL,
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        minimumBytes: UInt64 = 10_485_760,
+        skippedProtectedDirectoryPaths: inout Set<String>
+    ) -> [ScannedItem] {
         var candidates: [(url: URL, displayName: String, isParentOfSubcaches: Bool)] = [
             (homeRoot.appendingPathComponent(".npm/_cacache", isDirectory: true), "npm Package Cache (.npm/_cacache)", false),
             (homeRoot.appendingPathComponent(".npm/_npx", isDirectory: true), "npm npx Cache (.npm/_npx)", false),
@@ -169,19 +293,41 @@ public enum DeadFileScanner {
             (libraryRoot.appendingPathComponent("Developer/CoreSimulator/Caches", isDirectory: true), "iOS Simulator Caches", false),
         ]
 
+        let boundaries = [homeRoot, libraryRoot]
         let fm = FileManager.default
         var expandedTargets: [(url: URL, label: String)] = []
         for entry in candidates {
             if entry.isParentOfSubcaches {
-                guard let subdirs = try? fm.contentsOfDirectory(
-                    at: entry.url,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                    options: [.skipsHiddenFiles]
-                ) else { continue }
-                for sub in subdirs {
-                    let vals = try? sub.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                    if vals?.isDirectory == true && vals?.isSymbolicLink != true {
-                        expandedTargets.append((sub, ".cache/\(sub.lastPathComponent)"))
+                guard safetyGuard.isScanDirectoryAllowed(entry.url, excludedFolders: excludedFolders) else { continue }
+                do {
+                    let subdirs = try fm.contentsOfDirectory(
+                        at: entry.url,
+                        includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                        options: [.skipsHiddenFiles]
+                    )
+                    for sub in subdirs {
+                        do {
+                            let vals = try sub.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                            if vals.isDirectory == true && vals.isSymbolicLink != true {
+                                expandedTargets.append((sub, ".cache/\(sub.lastPathComponent)"))
+                            }
+                        } catch {
+                            if FilesystemProbes.isPermissionError(error),
+                               FilesystemProbes.isDirectoryPath(sub),
+                               (try? safetyGuard.validatePath(sub, excludedFolders: excludedFolders)) != nil {
+                                skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: sub))
+                            }
+                        }
+                    }
+                } catch {
+                    if FilesystemProbes.isPermissionError(error) {
+                        recordProtectedDirectory(
+                            entry.url,
+                            boundaries: boundaries,
+                            safetyGuard: safetyGuard,
+                            excludedFolders: excludedFolders,
+                            into: &skippedProtectedDirectoryPaths
+                        )
                     }
                 }
             } else {
@@ -193,13 +339,31 @@ public enum DeadFileScanner {
         var results: [ScannedItem] = []
         for target in expandedTargets {
             if Task.isCancelled { return results }
-            guard fm.fileExists(atPath: target.url.path),
-                  (try? safetyGuard.validatePath(target.url, excludedFolders: excludedFolders)) != nil,
-                  FilesystemProbes.isCleanableByCurrentProcess(target.url) else {
+            guard (try? safetyGuard.validatePath(target.url, excludedFolders: excludedFolders)) != nil else {
                 continue
             }
 
-            let size = FilesystemProbes.directorySize(at: target.url)
+            guard fm.fileExists(atPath: target.url.path) else {
+                if let unreadableAncestor = FilesystemProbes.nearestUnreadableProtectedDirectory(
+                    for: target.url,
+                    stoppingAt: boundaries
+                ), (try? safetyGuard.validatePath(unreadableAncestor, excludedFolders: excludedFolders)) != nil {
+                    skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: unreadableAncestor))
+                }
+                continue
+            }
+
+            guard FilesystemProbes.isCleanableByCurrentProcess(target.url) else {
+                if FilesystemProbes.isUnreadableProtectedDirectory(target.url) {
+                    skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: target.url))
+                }
+                continue
+            }
+
+            let size = FilesystemProbes.directorySize(
+                at: target.url,
+                skippedProtectedDirectoryPaths: &skippedProtectedDirectoryPaths
+            )
             guard size >= minimumBytes else { continue }
 
             let values = try? target.url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
@@ -229,8 +393,28 @@ public enum DeadFileScanner {
         excludedFolders: [String],
         now: Date = Date()
     ) -> [ScannedItem] {
+        var ignored: Set<String> = []
+        return scanBrokenDownloads(
+            downloadsRoot: downloadsRoot,
+            safetyGuard: safetyGuard,
+            excludedFolders: excludedFolders,
+            now: now,
+            skippedProtectedDirectoryPaths: &ignored
+        )
+    }
+
+    static func scanBrokenDownloads(
+        downloadsRoot: URL,
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        now: Date = Date(),
+        skippedProtectedDirectoryPaths: inout Set<String>
+    ) -> [ScannedItem] {
+        guard safetyGuard.isScanDirectoryAllowed(downloadsRoot, excludedFolders: excludedFolders) else { return [] }
+
         let fm = FileManager.default
         let keys: Set<URLResourceKey> = [
+            .isDirectoryKey,
             .isRegularFileKey,
             .fileSizeKey,
             .fileAllocatedSizeKey,
@@ -238,17 +422,41 @@ public enum DeadFileScanner {
             .creationDateKey,
             .contentAccessDateKey,
         ]
-        guard let entries = try? fm.contentsOfDirectory(
-            at: downloadsRoot,
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
+        let entries: [URL]
+        do {
+            entries = try fm.contentsOfDirectory(
+                at: downloadsRoot,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            if FilesystemProbes.isPermissionError(error) {
+                recordProtectedDirectory(
+                    downloadsRoot,
+                    boundaries: [downloadsRoot],
+                    safetyGuard: safetyGuard,
+                    excludedFolders: excludedFolders,
+                    into: &skippedProtectedDirectoryPaths
+                )
+            }
+            return []
+        }
 
         var items: [ScannedItem] = []
         for entry in entries {
             if Task.isCancelled { return items }
-            guard let values = try? entry.resourceValues(forKeys: keys),
-                  values.isRegularFile == true else { continue }
+            let values: URLResourceValues
+            do {
+                values = try entry.resourceValues(forKeys: keys)
+            } catch {
+                if FilesystemProbes.isPermissionError(error),
+                   FilesystemProbes.isDirectoryPath(entry),
+                   (try? safetyGuard.validatePath(entry, excludedFolders: excludedFolders)) != nil {
+                    skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: entry))
+                }
+                continue
+            }
+            guard values.isRegularFile == true else { continue }
             let size = UInt64(max(0, values.fileSize ?? 0))
             let allocated = UInt64(max(0, values.fileAllocatedSize ?? values.fileSize ?? 0))
             guard BrokenDownloadPolicy.isBrokenDownload(
@@ -290,5 +498,23 @@ public enum DeadFileScanner {
         }
         return contents.isEmpty
     }
-}
 
+    private static func recordProtectedDirectory(
+        _ candidate: URL,
+        boundaries: [URL],
+        safetyGuard: SafetyGuard,
+        excludedFolders: [String],
+        into skippedProtectedDirectoryPaths: inout Set<String>
+    ) {
+        let resolved = FilesystemProbes.nearestUnreadableProtectedDirectory(
+            for: candidate,
+            stoppingAt: boundaries
+        ) ?? candidate
+        guard FilesystemProbes.isDirectoryPath(resolved),
+              safetyGuard.isScanDirectoryAllowed(resolved, excludedFolders: excludedFolders),
+              (try? safetyGuard.validatePath(resolved, excludedFolders: excludedFolders)) != nil else {
+            return
+        }
+        skippedProtectedDirectoryPaths.insert(FilesystemProbes.canonicalPath(for: resolved))
+    }
+}

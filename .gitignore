@@ -11,3 +11,10 @@ dist/
 *.profdata
 *.lcov
 
+# Signing credentials and export configuration
+*.p12
+*.cer
+*.mobileprovision
+*.p8
+ExportOptions*.plist
+

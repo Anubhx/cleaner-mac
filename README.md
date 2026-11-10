@@ -1,6 +1,6 @@
 # CleanerMac
 
-**CleanerMac** is a native, local-only macOS disk-hygiene utility written in Swift 6 and SwiftUI for macOS 14+ (Apple Silicon & Intel). It finds duplicates, oversized files, stale untouched files, and dead leftovers (orphaned app data, caches, broken downloads, empty folders) using a background scanner, live multi-type preview inspector, Trash-first reversibility, and strict protected-path safety guards.
+**CleanerMac** is a native, local-only macOS disk-hygiene utility written in Swift 6 and SwiftUI for macOS 14+ on Apple Silicon (`arm64` only). It finds duplicates, oversized files, stale untouched files, and dead leftovers (orphaned app data, caches, broken downloads, empty folders) using a background scanner, live multi-type preview inspector, Trash-first reversibility, and strict protected-path safety guards.
 
 ---
 
@@ -28,7 +28,7 @@
 
 ## Requirements & Privacy Guarantee
 
-- **OS:** macOS 14.0 (Sonoma) or newer (Apple Silicon M1–M4 and Intel supported)
+- **OS:** macOS 14.0 (Sonoma) or newer (Apple Silicon / `arm64` only)
 - **Toolchain:** Swift 6.0+ (`Xcode 16+` or standalone Apple Command Line Tools)
 - **Privacy:** 100% offline. **Zero network requests, zero analytics, zero telemetry.**
 

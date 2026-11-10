@@ -10,6 +10,7 @@ struct FrontierWalkState {
     var visited: Set<String>
     var scannedCount: Int
     var bytesEvaluated: UInt64
+    var skippedProtectedDirectories: Int = 0
     let startedAt: Date
     let configuration: ScanConfiguration
 
@@ -38,6 +39,7 @@ struct FrontierWalkState {
         self.visited = checkpoint.visitedDirectoryPaths
         self.scannedCount = checkpoint.scannedFiles
         self.bytesEvaluated = checkpoint.bytesEvaluated
+        self.skippedProtectedDirectories = checkpoint.skippedProtectedDirectories
         self.startedAt = checkpoint.startedAt
         self.configuration = checkpoint.configuration
     }
@@ -51,6 +53,7 @@ struct FrontierWalkState {
             visitedDirectoryPaths: visited,
             scannedFiles: scannedCount,
             bytesEvaluated: bytesEvaluated,
+            skippedProtectedDirectories: skippedProtectedDirectories,
             startedAt: startedAt
         )
     }
@@ -122,6 +125,10 @@ enum DirectoryFrontierWalker {
         path == userLibraryPath || path.hasPrefix(userLibraryPath + "/")
     }
 
+    static func isPermissionError(_ error: any Error) -> Bool {
+        FilesystemProbes.isPermissionError(error)
+    }
+
     static func inspectDirectory(
         _ directory: URL,
         state: inout FrontierWalkState,
@@ -132,11 +139,19 @@ enum DirectoryFrontierWalker {
         let config = state.configuration
         let options: FileManager.DirectoryEnumerationOptions = config.skipHiddenFiles ? [.skipsHiddenFiles] : []
 
-        guard let children = try? fm.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: resourceKeys,
-            options: options
-        ) else { return }
+        let children: [URL]
+        do {
+            children = try fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: resourceKeys,
+                options: options
+            )
+        } catch {
+            if Self.isPermissionError(error) {
+                state.skippedProtectedDirectories += 1
+            }
+            return
+        }
 
         let libPath = userLibraryPath(configuration: config, safetyGuard: safetyGuard)
         let explicitLib = isExplicitLibraryRoot(configuration: config, userLibraryPath: libPath)
@@ -165,7 +180,21 @@ enum DirectoryFrontierWalker {
         let keySet = Set(resourceKeys)
         for child in children {
             if Task.isCancelled { break }
-            guard let values = try? child.resourceValues(forKeys: keySet) else { continue }
+            let values: URLResourceValues
+            do {
+                values = try child.resourceValues(forKeys: keySet)
+            } catch {
+                if Self.isPermissionError(error), FilesystemProbes.isDirectoryPath(child) {
+                    let childCanonical = FilesystemProbes.canonicalPath(for: child)
+                    let allowedLibrary = explicitLib || !shouldSkipUserLibrarySubtree(childCanonical: childCanonical, userLibraryPath: libPath)
+                    if allowedLibrary,
+                       safetyGuard.isScanDirectoryAllowed(child, excludedFolders: config.excludedFolders),
+                       state.visited.insert(childCanonical).inserted {
+                        state.skippedProtectedDirectories += 1
+                    }
+                }
+                continue
+            }
             if values.isSymbolicLink == true { continue }
 
             if values.isDirectory == true {

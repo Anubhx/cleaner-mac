@@ -13,8 +13,15 @@ final class CleanerAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
             let mainWindow = NSApp.windows.first(where: {
-                $0.canBecomeMain && !$0.isSheet && $0.identifier?.rawValue != "com_apple_SwiftUI_Settings_window"
-            }) ?? NSApp.windows.first(where: { $0.canBecomeMain && !$0.isSheet })
+                $0.canBecomeMain
+                    && !$0.isSheet
+                    && $0.identifier?.rawValue != "com_apple_SwiftUI_Settings_window"
+                    && $0.identifier != WelcomeOnboardingPolicy.windowIdentifier
+            }) ?? NSApp.windows.first(where: {
+                $0.canBecomeMain
+                    && !$0.isSheet
+                    && $0.identifier != WelcomeOnboardingPolicy.windowIdentifier
+            })
             mainWindow?.makeKeyAndOrderFront(nil)
         }
         return true
@@ -25,38 +32,60 @@ final class CleanerAppDelegate: NSObject, NSApplicationDelegate {
 struct CleanerMacApp: App {
     @NSApplicationDelegateAdaptor(CleanerAppDelegate.self) private var appDelegate
     @State private var store: CleanerWorkspaceStore
-    @State private var showLaunchSplash = true
+    @State private var welcomeController: WelcomeWindowController
+    @State private var didEvaluateFirstLaunchWelcome = false
 
     init() {
         InstrumentSerifFontRegistrar.registerBundledFonts()
         let coordinator = ScanCoordinator()
         let executor = DeletionExecutor()
         let historyStore = CleanHistoryStore()
-        _store = State(initialValue: CleanerWorkspaceStore(
+        let permissionChecker = SystemFullDiskAccessChecker()
+        let workspaceStore = CleanerWorkspaceStore(
             scanner: coordinator,
             deleter: executor,
             historyStore: historyStore,
-            previewService: PreviewService()
-        ))
+            previewService: PreviewService(),
+            permissionChecker: permissionChecker
+        )
+        let controller = WelcomeWindowController(
+            permissionChecker: permissionChecker,
+            initialPermissionStatus: workspaceStore.permissionStatus,
+            observesApplicationActivation: false,
+            onDismissedWithoutCompletion: { [weak workspaceStore] status in
+                workspaceStore?.handleWelcomeDismissed(completed: false, permissionStatus: status)
+            },
+            onCompleted: { [weak workspaceStore] status in
+                workspaceStore?.handleWelcomeDismissed(completed: true, permissionStatus: status)
+            },
+            onPermissionStatusChanged: { [weak workspaceStore] status in
+                workspaceStore?.applyPermissionStatus(status)
+            }
+        )
+        workspaceStore.onPermissionStatusDidChange = { [weak controller] status in
+            controller?.model.syncPermissionStatus(status)
+        }
+        _store = State(initialValue: workspaceStore)
+        _welcomeController = State(initialValue: controller)
     }
 
     var body: some Scene {
         WindowGroup("CleanerMac") {
-            ZStack {
-                CleanerRootView(store: store)
-                    .task {
-                        await store.loadInitialHistory()
-                    }
-
-                if showLaunchSplash {
-                    LaunchSplashView(isPresented: $showLaunchSplash)
-                        .zIndex(1)
+            CleanerRootView(store: store)
+                .task {
+                    await store.loadInitialHistory()
                 }
-            }
+                .onAppear {
+                    guard !didEvaluateFirstLaunchWelcome else { return }
+                    didEvaluateFirstLaunchWelcome = true
+                    Task { @MainActor in
+                        welcomeController.showIfNeededOnLaunch()
+                    }
+                }
         }
         .defaultSize(width: 1240, height: 780)
         .commands {
-            CleanerAppCommands(store: store)
+            CleanerAppCommands(store: store, welcomeController: welcomeController)
         }
 
         Settings {
@@ -68,9 +97,17 @@ struct CleanerMacApp: App {
 
 private struct CleanerAppCommands: Commands {
     @Bindable var store: CleanerWorkspaceStore
+    let welcomeController: WelcomeWindowController
     @FocusedValue(\.workspaceStore) private var focusedWorkspace
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Divider()
+            Button("Show Welcome") {
+                welcomeController.show(isFirstLaunch: false)
+            }
+        }
+
         CommandGroup(replacing: .newItem) {}
 
         CommandMenu("Scan") {

@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 import AppKit
 import SwiftUI
 @testable import CleanerCore
@@ -677,172 +678,953 @@ struct CleanerUITests {
         #expect(host.fittingSize.width <= 340)
     }
 
-    @Test("Launch splash policy stays under 1s and disables spring/scale/symbol effects under Reduce Motion")
-    func launchSplashPolicyEnforcesDurationAndReduceMotionContract() {
-        let standard = LaunchSplashPolicy.resolve(reduceMotion: false)
-        #expect(standard.reduceMotion == false)
-        #expect(standard.totalDuration >= 0.80)
-        #expect(standard.totalDuration < 1.00)
-        #expect(standard.usesSpringEntrance == true)
-        #expect(standard.usesSymbolReplace == false)
-        #expect(standard.entranceScale < 1.0)
+    @Test("Toolbar inspector toggle aligns right of the inspector divider without straddling it and stays accessible when collapsed")
+    @MainActor
+    func inspectorToolbarButtonAlignsCleanlyWithSplitDivider() {
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService()
+        )
+        store.isInspectorVisible = true
 
-        let reduced = LaunchSplashPolicy.resolve(reduceMotion: true)
-        #expect(reduced.reduceMotion == true)
-        #expect(reduced.totalDuration >= 0.80)
-        #expect(reduced.totalDuration < 1.00)
-        #expect(reduced.usesSpringEntrance == false)
-        #expect(reduced.usesSymbolReplace == false)
-        #expect(reduced.entranceScale == 1.0)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: CleanerRootView(store: store))
+        window.setContentSize(NSSize(width: 1240, height: 780))
+        window.orderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        let expectedRightEdge = window.frame.width - 10
+        // Locate inspector column divider X from the outer NSSplitView hosting the inspector
+        func findInspectorDividerX(in view: NSView) -> CGFloat? {
+            if let split = view as? NSSplitView {
+                for subview in split.subviews {
+                    let frame = subview.convert(subview.bounds, to: nil)
+                    if frame.width >= 340 && frame.width <= 460 && frame.maxX >= expectedRightEdge {
+                        return frame.minX
+                    }
+                }
+            }
+            for sub in view.subviews {
+                if let found = findInspectorDividerX(in: sub) {
+                    return found
+                }
+            }
+            return nil
+        }
+
+        guard let themeFrame = window.contentView?.superview,
+              let dividerX = findInspectorDividerX(in: themeFrame) else {
+            Issue.record("Expected inspector split view divider to be present")
+            return
+        }
+
+        let items = window.toolbar?.items ?? []
+        #expect(items.contains { $0.itemIdentifier.rawValue.contains("splitViewSeparator") && $0 is NSTrackingSeparatorToolbarItem })
+        #expect(items.contains { $0.itemIdentifier.rawValue == "com.apple.SwiftUI.splitViewSeparator-0i" })
+
+        let inspectorItem = items.first { $0.label == "Preview Inspector" }
+        #expect(inspectorItem != nil)
+
+        if let view = inspectorItem?.view {
+            let itemFrame = view.convert(view.bounds, to: nil)
+            #expect(itemFrame.minX > dividerX)
+        }
+
+        // Verify no visible toolbar control straddles the inspector split divider
+        for item in items {
+            guard let view = item.view else { continue }
+            let f = view.convert(view.bounds, to: nil)
+            if f.width > 0 {
+                let straddles = f.minX < dividerX && f.maxX > dividerX
+                #expect(!straddles, "Toolbar item '\(item.label)' frame \(f) straddles inspector divider at x=\(dividerX)")
+            }
+        }
+
+        // Collapsing the inspector must still keep Preview Inspector accessible in the toolbar
+        store.isInspectorVisible = false
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        let closedItems = window.toolbar?.items ?? []
+        #expect(closedItems.contains { $0.label == "Preview Inspector" })
     }
 
-    @Test("Launch splash stays hit-test transparent, auto-dismisses under 1s, and never gates loadInitialHistory")
+    @Test("Welcome window uses fixed 680x440 non-resizable NSWindow and UserDefaults first-launch gating")
     @MainActor
-    func launchSplashAllowsUnderlyingInteractionAndNonGatedLoad() async {
+    func welcomeWindowUsesNonResizableNSWindowAndUserDefaultsGating() {
+        let suiteName = "CleanerUITests.Welcome.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let controller = WelcomeWindowController(
+            userDefaults: defaults,
+            permissionChecker: MutablePermissionChecker(initialStatus: .notGranted)
+        )
+
+        #expect(WelcomeOnboardingPolicy.shouldShowOnLaunch(userDefaults: defaults) == true)
+        controller.showIfNeededOnLaunch()
+
+        let window = controller.attachedWindow
+        #expect(window != nil)
+        #expect(window?.isSheet == false)
+        #expect(window?.styleMask.contains(.resizable) == false)
+        #expect(window?.contentMinSize == NSSize(width: 680, height: 440))
+        #expect(window?.contentMaxSize == NSSize(width: 680, height: 440))
+        #expect(controller.isVisible == true)
+        #expect(controller.model.currentStep == .welcome)
+
+        controller.model.completeOnboarding()
+        #expect(WelcomeOnboardingPolicy.shouldShowOnLaunch(userDefaults: defaults) == false)
+        #expect(controller.isVisible == false)
+
+        // Second launch should not auto-show once completed
+        let secondLaunchController = WelcomeWindowController(
+            userDefaults: defaults,
+            permissionChecker: MutablePermissionChecker(initialStatus: .notGranted)
+        )
+        secondLaunchController.showIfNeededOnLaunch()
+        #expect(secondLaunchController.attachedWindow == nil)
+
+        // App menu "Show Welcome" remains reachable and resets to .welcome
+        controller.model.selectStep(.permissions)
+        controller.show(isFirstLaunch: false)
+        #expect(controller.isVisible == true)
+        #expect(controller.model.currentStep == .welcome)
+        controller.attachedWindow?.close()
+    }
+
+    @Test("Welcome transition policy enforces directional slide when motion is allowed and plain crossfade under Reduce Motion")
+    @MainActor
+    func welcomeTransitionPolicyAndReduceMotionFallback() {
+        let normal = WelcomeTransitionPolicy.resolve(reduceMotion: false)
+        #expect(normal.reduceMotion == false)
+        #expect(normal.usesDirectionalSlide == true)
+        #expect(normal.slideOffset > 0)
+
+        let reduced = WelcomeTransitionPolicy.resolve(reduceMotion: true)
+        #expect(reduced.reduceMotion == true)
+        #expect(reduced.usesDirectionalSlide == false)
+        #expect(reduced.slideOffset == 0)
+
+        for reduceMotion in [false, true] {
+            let model = WelcomeOnboardingModel(
+                permissionChecker: MutablePermissionChecker(initialStatus: .notGranted)
+            )
+            let host = NSHostingView(rootView: WelcomeOnboardingView(model: model, reduceMotionOverride: reduceMotion))
+            host.frame = NSRect(origin: .zero, size: WelcomeOnboardingPolicy.windowSize)
+            for step in WelcomeStep.allCases {
+                model.selectStep(step)
+                host.layoutSubtreeIfNeeded()
+                #expect(host.fittingSize.width <= 680.5)
+                #expect(host.fittingSize.height <= 440.5)
+            }
+        }
+    }
+
+    @Test("Welcome keyboard navigation steps cleanly through Permissions and never skips it silently")
+    @MainActor
+    func welcomeKeyboardNavigationAndNeverSkipsPermissionsStep() {
+        let suiteName = "CleanerUITests.WelcomeKeys.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let controller = WelcomeWindowController(
+            userDefaults: defaults,
+            permissionChecker: MutablePermissionChecker(initialStatus: .notGranted)
+        )
+        controller.showIfNeededOnLaunch()
+        guard let window = controller.attachedWindow else {
+            Issue.record("Expected Welcome NSWindow to be created")
+            return
+        }
+
+        func makeKeyEvent(keyCode: UInt16) -> NSEvent {
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                isARepeat: false,
+                keyCode: keyCode
+            )!
+        }
+
+        // Return advances Welcome -> How It Works -> Permissions (must not skip Permissions) -> Ready
+        #expect(controller.model.currentStep == .welcome)
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 36)) == true)
+        #expect(controller.model.currentStep == .howItWorks)
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 36)) == true)
+        #expect(controller.model.currentStep == .permissions)
+
+        // Up/Left arrow steps backward cleanly; Down/Right steps forward
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 126)) == true)
+        #expect(controller.model.currentStep == .howItWorks)
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 124)) == true)
+        #expect(controller.model.currentStep == .permissions)
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 123)) == true)
+        #expect(controller.model.currentStep == .howItWorks)
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 125)) == true)
+        #expect(controller.model.currentStep == .permissions)
+
+        // Advance to Ready and complete with Return ("Get Started")
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 36)) == true)
+        #expect(controller.model.currentStep == .ready)
+        #expect(controller.handleKeyEvent(makeKeyEvent(keyCode: 36)) == true)
+        #expect(controller.isVisible == false)
+        #expect(WelcomeOnboardingPolicy.shouldShowOnLaunch(userDefaults: defaults) == false)
+    }
+
+    @Test("Permissions step opens Full Disk Access deep link and updates live status")
+    @MainActor
+    func welcomePermissionsStepDeepLinksAndReflectsLiveStatus() {
+        let suiteName = "CleanerUITests.WelcomePerm.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let checker = MutablePermissionChecker(initialStatus: .notGranted)
+        var openedURLs: [URL] = []
+
+        let model = WelcomeOnboardingModel(
+            isFirstLaunch: true,
+            userDefaults: defaults,
+            permissionChecker: checker,
+            openURLHandler: { url in
+                openedURLs.append(url)
+                return true
+            }
+        )
+
+        #expect(model.permissionStatus == .notGranted)
+        model.selectStep(.permissions)
+        #expect(model.openFullDiskAccessSettings() == true)
+        #expect(openedURLs == [SystemFullDiskAccessChecker.fullDiskAccessSettingsURL])
+
+        checker.currentStatus = .granted
+        #expect(model.refreshPermissionStatus() == .granted)
+        #expect(model.permissionStatus == .granted)
+    }
+
+    @Test("Escape before granting Full Disk Access exits safely into documented limited scan mode")
+    @MainActor
+    func welcomeEscapeDismissalPreservesSafeDegradedMode() async {
+        let suiteName = "CleanerUITests.WelcomeEscape.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let checker = MutablePermissionChecker(initialStatus: .notGranted)
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome(progress: ScanProgress(phase: .completed, skippedProtectedDirectories: 2))),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            permissionChecker: checker
+        )
+
+        let controller = WelcomeWindowController(
+            userDefaults: defaults,
+            permissionChecker: checker,
+            onDismissedWithoutCompletion: { _ in
+                store.handleWelcomeDismissed(completed: false)
+            }
+        )
+        controller.showIfNeededOnLaunch()
+        guard let window = controller.attachedWindow else {
+            Issue.record("Expected Welcome NSWindow to be created")
+            return
+        }
+
+        let escapeEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 53
+        )!
+
+        #expect(controller.handleKeyEvent(escapeEvent) == true)
+        #expect(controller.isVisible == false)
+        #expect(store.permissionStatus == .notGranted)
+        #expect(store.statusBannerMessage?.contains("Limited scan mode") == true)
+
+        // App continues functioning cleanly in read-only scan mode
+        await store.startScan()
+        #expect(store.progress.phase == .completed)
+        #expect(store.progress.skippedProtectedDirectories == 2)
+
+        // Once granted and refreshed, degraded banner clears
+        checker.currentStatus = .granted
+        store.statusBannerMessage = "Limited scan mode: Full Disk Access is not granted"
+        #expect(store.refreshPermissionStatus() == .granted)
+        #expect(store.statusBannerMessage == nil)
+    }
+
+    @Test("App activation refreshes workspace FDA status and collapses limited-scan banner in hosted root view")
+    @MainActor
+    func applicationActivationRefreshesStatusAndClearsLimitedScanBannerInUI() {
         InstrumentSerifFontRegistrar.registerBundledFonts()
+        let center = NotificationCenter()
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService(),
+            permissionChecker: checker,
+            notificationCenter: center
+        )
+        store.selectedSidebarDestination = .category(.largeFiles)
+        store.handleWelcomeDismissed(completed: false)
+        #expect(store.permissionStatus == .notGranted)
+        #expect(store.statusBannerMessage?.hasPrefix("Limited scan mode:") == true)
 
-        // 1. Hit-test pass-through: verify opaque overlay without allowsHitTesting(false) blocks,
-        //    whereas LaunchSplashView lets pointer hits reach underlying controls at (300, 200)
-        final class HitProbeNSView: NSView {}
-        struct HitProbeRepresentable: NSViewRepresentable {
-            func makeNSView(context: Context) -> HitProbeNSView { HitProbeNSView() }
-            func updateNSView(_ nsView: HitProbeNSView, context: Context) {}
-        }
-
-        let blockingContainer = ZStack {
-            HitProbeRepresentable()
-                .frame(width: 600, height: 400)
-            Color(nsColor: .windowBackgroundColor)
-                .frame(width: 600, height: 400)
-        }
-        let blockingHost = NSHostingView(rootView: blockingContainer)
-        let blockingWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-            styleMask: [.titled],
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        blockingWindow.isReleasedWhenClosed = false
-        blockingWindow.contentView = blockingHost
-        blockingHost.layoutSubtreeIfNeeded()
-        #expect(!(blockingHost.hitTest(NSPoint(x: 300, y: 200)) is HitProbeNSView))
-        blockingWindow.close()
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: CleanerRootView(store: store))
+        window.setContentSize(NSSize(width: 1240, height: 780))
+        window.orderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
 
-        let interactiveContainer = ZStack {
-            HitProbeRepresentable()
-                .frame(width: 600, height: 400)
-
-            LaunchSplashView(isPresented: .constant(true), reduceMotionOverride: false)
-                .transition(.opacity)
+        guard let sortPopUpBefore = findPopUpButton(in: window.contentView) else {
+            Issue.record("Expected ResultsListView sort NSPopUpButton in hosted CleanerRootView")
+            return
         }
-        .frame(width: 600, height: 400)
+        let frameWithBanner = sortPopUpBefore.convert(sortPopUpBefore.bounds, to: nil)
 
-        let interactiveHost = NSHostingView(rootView: interactiveContainer)
-        let interactiveWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+        // Grant FDA and simulate switching back from System Settings
+        checker.currentStatus = .granted
+        let baselineChecks = checker.checkCount
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        window.contentView?.layoutSubtreeIfNeeded()
+
+        #expect(checker.checkCount - baselineChecks == 1)
+        #expect(store.permissionStatus == .granted)
+        #expect(store.statusBannerMessage == nil)
+
+        guard let sortPopUpAfter = findPopUpButton(in: window.contentView) else {
+            Issue.record("Expected ResultsListView sort NSPopUpButton after banner removal")
+            return
+        }
+        let frameWithoutBanner = sortPopUpAfter.convert(sortPopUpAfter.bounds, to: nil)
+        // AppKit window Y increases upward, so collapsing the banner above ResultsListView shifts actionBar upward.
+        #expect(frameWithoutBanner.maxY - frameWithBanner.maxY >= 20)
+
+        // Post-scan limited-scan banner also clears on activation without touching unrelated banners
+        checker.currentStatus = .notGranted
+        store.refreshPermissionStatus()
+        store.statusBannerMessage = "Limited scan mode: Skipped 2 protected folders without Full Disk Access."
+        checker.currentStatus = .granted
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        #expect(store.statusBannerMessage == nil)
+
+        store.statusBannerMessage = "Restored archive.zip to original location."
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        #expect(store.statusBannerMessage == "Restored archive.zip to original location.")
+    }
+
+    @Test("Paired Welcome and main window perform only one FDA probe per activation while keeping both synced")
+    @MainActor
+    func pairedWelcomeAndMainWindowAvoidDuplicateActivationProbes() {
+        let suiteName = "CleanerUITests.PairedActivation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let center = NotificationCenter()
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService(),
+            permissionChecker: checker,
+            notificationCenter: center
         )
-        interactiveWindow.isReleasedWhenClosed = false
-        interactiveWindow.contentView = interactiveHost
-        interactiveHost.layoutSubtreeIfNeeded()
-        try? await Task.sleep(for: .milliseconds(50))
+        let controller = WelcomeWindowController(
+            userDefaults: defaults,
+            permissionChecker: checker,
+            initialPermissionStatus: store.permissionStatus,
+            observesApplicationActivation: false,
+            notificationCenter: center,
+            onDismissedWithoutCompletion: { [weak store] status in
+                store?.handleWelcomeDismissed(completed: false, permissionStatus: status)
+            },
+            onCompleted: { [weak store] status in
+                store?.handleWelcomeDismissed(completed: true, permissionStatus: status)
+            },
+            onPermissionStatusChanged: { [weak store] status in
+                store?.applyPermissionStatus(status)
+            }
+        )
+        store.onPermissionStatusDidChange = { [weak controller] status in
+            controller?.model.syncPermissionStatus(status)
+        }
 
-        let hitView = interactiveHost.hitTest(NSPoint(x: 300, y: 200))
-        #expect(hitView is HitProbeNSView)
-        interactiveWindow.close()
+        // Simulate degraded banner already present when user reopens Show Welcome
+        store.handleWelcomeDismissed(completed: false)
+        #expect(store.statusBannerMessage?.hasPrefix("Limited scan mode:") == true)
 
-        // 2. Non-blocking over live CleanerRootView while loadInitialHistory() is suspended, for both Reduce Motion modes
-        for reduceMotionMode in [false, true] {
-            let suspendedHistory = SuspendableHistoryService()
+        controller.show(isFirstLaunch: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        #expect(controller.isVisible == true)
+        defer { controller.attachedWindow?.close() }
+
+        // Grant FDA and return to app while BOTH Welcome and main store exist: must probe ONCE
+        checker.currentStatus = .granted
+        let baselineWithWelcomeOpen = checker.checkCount
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+
+        #expect(checker.checkCount - baselineWithWelcomeOpen == 1)
+        #expect(store.permissionStatus == .granted)
+        #expect(controller.model.permissionStatus == .granted)
+        #expect(store.statusBannerMessage == nil)
+
+        // Closing Welcome still leaves main store active with a single probe per activation
+        controller.attachedWindow?.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        #expect(controller.isVisible == false)
+
+        checker.currentStatus = .notGranted
+        let baselineAfterClose = checker.checkCount
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        #expect(checker.checkCount == baselineAfterClose + 1)
+        #expect(store.permissionStatus == .notGranted)
+
+        // Manual "Check Status" in Welcome also syncs back to workspace store & clears banner with 1 probe
+        store.handleWelcomeDismissed(completed: false)
+        #expect(store.statusBannerMessage?.hasPrefix("Limited scan mode:") == true)
+        controller.show(isFirstLaunch: false)
+        checker.currentStatus = .granted
+        let manualBaseline = checker.checkCount
+        #expect(controller.model.refreshPermissionStatus() == .granted)
+        #expect(checker.checkCount - manualBaseline == 1)
+        #expect(store.permissionStatus == .granted)
+        #expect(store.statusBannerMessage == nil)
+    }
+
+    @Test("Default NotificationCenter.default wiring refreshes workspace store on app activation")
+    @MainActor
+    func defaultNotificationCenterRefreshesWorkspaceStore() {
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService(),
+            permissionChecker: checker
+        )
+        store.statusBannerMessage = "Limited scan mode: Skipped 1 protected folder without Full Disk Access."
+        #expect(store.permissionStatus == .notGranted)
+
+        checker.currentStatus = .granted
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        #expect(store.permissionStatus == .granted)
+        #expect(store.statusBannerMessage == nil)
+    }
+
+    @Test("Closed Welcome window does not re-probe Full Disk Access on app activation even with default observation")
+    @MainActor
+    func closedWelcomeWindowDoesNotProbeOnActivation() {
+        let suiteName = "CleanerUITests.ClosedWelcomeActivation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let center = NotificationCenter()
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        let controller = WelcomeWindowController(
+            userDefaults: defaults,
+            permissionChecker: checker,
+            notificationCenter: center
+        )
+        controller.show(isFirstLaunch: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        #expect(controller.isVisible == true)
+
+        // While visible, standalone Welcome refreshes on app activation
+        checker.currentStatus = .granted
+        let visibleBaseline = checker.checkCount
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        #expect(checker.checkCount - visibleBaseline == 1)
+        #expect(controller.model.permissionStatus == .granted)
+
+        // Once closed, retained NSHostingView/window must not probe on activation
+        controller.attachedWindow?.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        #expect(controller.isVisible == false)
+
+        let closedBaseline = checker.checkCount
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        #expect(checker.checkCount == closedBaseline)
+    }
+
+    @Test("Workspace activation observer releases cleanly on store deinit")
+    @MainActor
+    func workspaceActivationObserverUnregistersOnDeinit() {
+        let center = NotificationCenter()
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        weak var weakStore: CleanerWorkspaceStore?
+
+        do {
             let store = CleanerWorkspaceStore(
                 scanner: FakeScanningService(outcome: ScanOutcome()),
                 deleter: FakeDeletionService(),
-                historyStore: suspendedHistory,
-                previewService: PreviewService()
+                historyStore: FakeHistoryService(),
+                previewService: PreviewService(),
+                permissionChecker: checker,
+                notificationCenter: center
             )
+            weakStore = store
+            checker.currentStatus = .granted
+            center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            #expect(store.permissionStatus == .granted)
+        }
 
-            var splashVisible = true
-            let binding = Binding(
-                get: { splashVisible },
-                set: { splashVisible = $0 }
-            )
+        #expect(weakStore == nil)
+        let countAfterDeinit = checker.checkCount
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        #expect(checker.checkCount == countAfterDeinit)
+    }
 
-            let splashRoot = ZStack {
-                CleanerRootView(store: store)
-                if splashVisible {
-                    LaunchSplashView(isPresented: binding, reduceMotionOverride: reduceMotionMode)
-                        .transition(.opacity)
-                        .zIndex(1)
+    @Test("Limited-scan banner offers direct Open Full Disk Access Settings action only for FDA warnings")
+    @MainActor
+    func limitedScanBannerExposesSettingsActionOnlyForPermissionWarnings() {
+        enableSwiftUIAccessibilityTree()
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+        let center = NotificationCenter()
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        var openedURLs: [URL] = []
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService(),
+            permissionChecker: checker,
+            notificationCenter: center,
+            openURLHandler: { url in
+                openedURLs.append(url)
+                return true
+            }
+        )
+        #expect(store.isLimitedScanBannerVisible == false)
+        store.selectedSidebarDestination = .category(.largeFiles)
+        store.handleWelcomeDismissed(completed: false)
+        #expect(store.isLimitedScanBannerVisible == true)
+        #expect(store.openFullDiskAccessSettings() == true)
+        #expect(openedURLs == [SystemFullDiskAccessChecker.fullDiskAccessSettingsURL])
+        openedURLs.removeAll()
+
+        store.statusBannerMessage = "Limited scan mode: Skipped 2 protected folders without Full Disk Access."
+        #expect(store.isLimitedScanBannerVisible == true)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: CleanerRootView(store: store))
+        window.setContentSize(NSSize(width: 1100, height: 720))
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        guard let settingsButton = findButton(
+            in: window,
+            matchingIdentifier: "bannerOpenFullDiskAccessButton",
+            fallbackText: "Open Full Disk Access Settings"
+        ) else {
+            Issue.record("Expected Open Full Disk Access Settings button inside limited-scan banner. Tree:\n\(dumpAccessibilityTree(in: window.contentView))")
+            return
+        }
+        #expect(settingsButton.press())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(openedURLs == [SystemFullDiskAccessChecker.fullDiskAccessSettingsURL])
+
+        // Non-permission informational banners (e.g. restore confirmation) must NOT show the FDA settings shortcut
+        store.statusBannerMessage = "Restored archive.zip to original location."
+        #expect(store.isLimitedScanBannerVisible == false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(findButton(
+            in: window,
+            matchingIdentifier: "bannerOpenFullDiskAccessButton",
+            fallbackText: "Open Full Disk Access Settings"
+        ) == nil)
+
+        // Switching back to a limited-scan banner shows the action again; granting FDA on activation clears both
+        store.statusBannerMessage = "Limited scan mode: Skipped 2 protected folders without Full Disk Access."
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(findButton(
+            in: window,
+            matchingIdentifier: "bannerOpenFullDiskAccessButton",
+            fallbackText: "Open Full Disk Access Settings"
+        ) != nil)
+
+        checker.currentStatus = .granted
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(store.isLimitedScanBannerVisible == false)
+        #expect(findButton(
+            in: window,
+            matchingIdentifier: "bannerOpenFullDiskAccessButton",
+            fallbackText: "Open Full Disk Access Settings"
+        ) == nil)
+    }
+
+    @Test("ScanSettingsView surfaces live Full Disk Access status, Check Status refresh, and Settings action without clipping")
+    @MainActor
+    func scanSettingsViewExposesFullDiskAccessControlsAndFitsSettingsScene() {
+        enableSwiftUIAccessibilityTree()
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+        let checker = CountingPermissionChecker(initialStatus: .notGranted)
+        var openedURLs: [URL] = []
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService(),
+            permissionChecker: checker,
+            notificationCenter: NotificationCenter(),
+            openURLHandler: { url in
+                openedURLs.append(url)
+                return true
+            }
+        )
+
+        var syncedStatuses: [FullDiskAccessStatus] = []
+        store.handleWelcomeDismissed(completed: false)
+        #expect(store.isLimitedScanBannerVisible == true)
+        store.onPermissionStatusDidChange = { status in
+            syncedStatuses.append(status)
+        }
+
+        let hostingController = NSHostingController(
+            rootView: ScanSettingsView(store: store, showsHeader: false)
+                .frame(minWidth: 580, minHeight: 520)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 520),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = hostingController
+        window.setContentSize(NSSize(width: 580, height: 520))
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        let fittedAt580 = hostingController.sizeThatFits(in: CGSize(width: 580, height: 520))
+        #expect(fittedAt580.width <= 580.5)
+        if let scrollView = findScrollView(in: window.contentView),
+           let documentView = scrollView.documentView {
+            #expect(documentView.frame.width <= 580.5)
+        }
+        #expect(containsText("Full Disk Access Not Granted", in: window.contentView))
+
+        guard let openSettingsButton = findButton(
+            in: window,
+            matchingIdentifier: "settingsOpenFullDiskAccessButton",
+            fallbackText: "Open Full Disk Access Settings…"
+        ),
+        let checkStatusButton = findButton(
+            in: window,
+            matchingIdentifier: "settingsCheckPermissionButton",
+            fallbackText: "Check Status"
+        ) else {
+            Issue.record("Expected Full Disk Access buttons in ScanSettingsView. Tree:\n\(dumpAccessibilityTree(in: window.contentView))")
+            return
+        }
+
+        let openFrame = openSettingsButton.frameInWindow
+        let checkFrame = checkStatusButton.frameInWindow
+        #expect(openFrame.width > 40 && openFrame.height > 12)
+        #expect(checkFrame.width > 40 && checkFrame.height > 12)
+        #expect(openFrame.minX >= 0 && openFrame.maxX <= 580.5)
+        #expect(checkFrame.minX >= 0 && checkFrame.maxX <= 580.5)
+        #expect(!openFrame.intersects(checkFrame))
+
+        #expect(openSettingsButton.press())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(openedURLs == [SystemFullDiskAccessChecker.fullDiskAccessSettingsURL])
+
+        checker.currentStatus = .granted
+        let baselineChecks = checker.checkCount
+        #expect(checkStatusButton.press())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(checker.checkCount == baselineChecks + 1)
+        #expect(store.permissionStatus == .granted)
+        #expect(store.statusBannerMessage == nil)
+        #expect(store.isLimitedScanBannerVisible == false)
+        #expect(syncedStatuses.last == .granted)
+        #expect(containsText("Full Disk Access Granted", in: window.contentView))
+    }
+
+    @MainActor
+    private func enableSwiftUIAccessibilityTree() {
+        let app = NSApplication.shared
+        let sel = NSSelectorFromString("accessibilitySetValue:forAttribute:")
+        if app.responds(to: sel) {
+            _ = (app as AnyObject).perform(sel, with: kCFBooleanTrue, with: "AXEnhancedUserInterface")
+        }
+    }
+
+    @MainActor
+    private func findPopUpButton(in rootView: NSView?) -> NSPopUpButton? {
+        guard let rootView else { return nil }
+        if let popUp = rootView as? NSPopUpButton {
+            return popUp
+        }
+        for subview in rootView.subviews {
+            if let found = findPopUpButton(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    private func findScrollView(in rootView: NSView?) -> NSScrollView? {
+        guard let rootView else { return nil }
+        if let scrollView = rootView as? NSScrollView {
+            return scrollView
+        }
+        for subview in rootView.subviews {
+            if let found = findScrollView(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private struct ButtonHandle {
+        let frameInWindow: NSRect
+        let press: @MainActor () -> Bool
+    }
+
+    @MainActor
+    private func accessibilityStringValue(of node: AnyObject) -> String? {
+        let sel = NSSelectorFromString("accessibilityValue")
+        guard (node as? NSObject)?.responds(to: sel) == true else { return nil }
+        return node.perform(sel)?.takeUnretainedValue() as? String
+    }
+
+    @MainActor
+    private func findButton(
+        in window: NSWindow,
+        matchingIdentifier identifier: String,
+        fallbackText: String
+    ) -> ButtonHandle? {
+        guard let rootView = window.contentView else { return nil }
+
+        var visitedObjects = Set<ObjectIdentifier>()
+
+        func inspectAccessibilityNode(_ node: AnyObject) -> ButtonHandle? {
+            let oid = ObjectIdentifier(node)
+            guard visitedObjects.insert(oid).inserted else { return nil }
+
+            if let button = node as? NSButton, !(button is NSPopUpButton) {
+                let idMatch = button.accessibilityIdentifier() == identifier || button.identifier?.rawValue == identifier
+                let textMatch = button.title == fallbackText
+                    || button.accessibilityTitle() == fallbackText
+                    || button.accessibilityLabel() == fallbackText
+                if idMatch || textMatch {
+                    return ButtonHandle(
+                        frameInWindow: button.convert(button.bounds, to: nil),
+                        press: {
+                            button.performClick(nil)
+                            return true
+                        }
+                    )
                 }
             }
-            .frame(width: 1240, height: 780)
 
-            let rootHost = NSHostingView(rootView: splashRoot)
-            let rootWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                backing: .buffered,
-                defer: false
-            )
-            rootWindow.isReleasedWhenClosed = false
-            rootWindow.contentView = rootHost
-            rootWindow.orderFront(nil)
-            rootHost.layoutSubtreeIfNeeded()
-
-            // Start loadInitialHistory() concurrently and mutate workspace while overlay is active
-            let historyTask = Task { await store.loadInitialHistory() }
-            await suspendedHistory.waitUntilStarted()
-            store.isDryRunEnabled = true
-            #expect(splashVisible == true)
-            #expect(store.isDryRunEnabled == true)
-
-            let deadline = Date().addingTimeInterval(1.15)
-            while splashVisible && Date() < deadline {
-                try? await Task.sleep(for: .milliseconds(20))
+            let role = node.accessibilityRole?()
+            let axIdentifier = node.accessibilityIdentifier?()
+            let axTitle = node.accessibilityTitle?()
+            let axLabel = node.accessibilityLabel?()
+            let idMatch = axIdentifier == identifier
+            let textMatch = axTitle == fallbackText
+                || axLabel == fallbackText
+                || (axTitle?.contains(fallbackText) == true)
+                || (axLabel?.contains(fallbackText) == true)
+            if role == .button && (idMatch || textMatch) {
+                let screenFrame = node.accessibilityFrame?() ?? .zero
+                let windowFrame = window.convertFromScreen(screenFrame)
+                return ButtonHandle(
+                    frameInWindow: windowFrame,
+                    press: { node.accessibilityPerformPress?() ?? false }
+                )
             }
-            #expect(splashVisible == false)
 
-            // Resume history loading only after splash completed to prove splash never gated on it
-            let expectedEntry = TrashHistoryEntry(
-                originalPath: "/Users/alice/Downloads/sample.zip",
-                trashPath: "/Users/alice/.Trash/sample.zip",
-                bytes: 2048,
-                trashInode: 42
-            )
-            await suspendedHistory.resume(with: [expectedEntry])
-            await historyTask.value
-            #expect(store.historyEntries == [expectedEntry])
-            rootWindow.close()
+            if let children = node.accessibilityChildren?() {
+                for child in children {
+                    if let found = inspectAccessibilityNode(child as AnyObject) {
+                        return found
+                    }
+                }
+            }
+
+            if let view = node as? NSView {
+                for subview in view.subviews {
+                    if let found = inspectAccessibilityNode(subview) {
+                        return found
+                    }
+                }
+            }
+            return nil
         }
+
+        return inspectAccessibilityNode(rootView)
+    }
+
+    @MainActor
+    private func containsText(_ needle: String, in rootView: NSView?) -> Bool {
+        guard let rootView else { return false }
+        var visited = Set<ObjectIdentifier>()
+
+        func inspect(_ node: AnyObject) -> Bool {
+            let oid = ObjectIdentifier(node)
+            guard visited.insert(oid).inserted else { return false }
+
+            if let field = node as? NSTextField, field.stringValue.contains(needle) {
+                return true
+            }
+            if let val = accessibilityStringValue(of: node), val.contains(needle) {
+                return true
+            }
+            if let title = node.accessibilityTitle?(), title.contains(needle) {
+                return true
+            }
+            if let label = node.accessibilityLabel?(), label.contains(needle) {
+                return true
+            }
+            if let children = node.accessibilityChildren?() {
+                for child in children where inspect(child as AnyObject) {
+                    return true
+                }
+            }
+            if let view = node as? NSView {
+                for subview in view.subviews where inspect(subview) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        return inspect(rootView)
+    }
+
+    @MainActor
+    private func dumpAccessibilityTree(in rootView: NSView?) -> String {
+        guard let rootView else { return "<nil>" }
+        var lines: [String] = []
+        var visited = Set<ObjectIdentifier>()
+
+        func walk(_ node: AnyObject, depth: Int) {
+            let oid = ObjectIdentifier(node)
+            guard visited.insert(oid).inserted, lines.count < 160 else { return }
+            let indent = String(repeating: "  ", count: depth)
+            let cls = NSStringFromClass(type(of: node))
+            var desc = "\(indent)\(cls)"
+            if let role = node.accessibilityRole?() { desc += " role=\(role.rawValue)" }
+            if let id = node.accessibilityIdentifier?(), !id.isEmpty { desc += " id=\(id)" }
+            if let title = node.accessibilityTitle?(), !title.isEmpty { desc += " title='\(title)'" }
+            if let label = node.accessibilityLabel?(), !label.isEmpty { desc += " label='\(label)'" }
+            if let val = accessibilityStringValue(of: node), !val.isEmpty { desc += " val='\(val)'" }
+            lines.append(desc)
+            for child in node.accessibilityChildren?() ?? [] {
+                walk(child as AnyObject, depth: depth + 1)
+            }
+            if let view = node as? NSView {
+                for sub in view.subviews {
+                    walk(sub, depth: depth + 1)
+                }
+            }
+        }
+
+        walk(rootView, depth: 0)
+        return lines.joined(separator: "\n")
     }
 }
 
-private actor SuspendableHistoryService: HistoryStoring {
-    private var started = false
-    private var continuation: CheckedContinuation<[TrashHistoryEntry], Never>?
+private final class MutablePermissionChecker: FullDiskAccessChecking, @unchecked Sendable {
+    var currentStatus: FullDiskAccessStatus
 
-    func loadEntries() async -> [TrashHistoryEntry] {
-        started = true
-        return await withCheckedContinuation { cont in
-            continuation = cont
+    init(initialStatus: FullDiskAccessStatus) {
+        self.currentStatus = initialStatus
+    }
+
+    var settingsURL: URL {
+        SystemFullDiskAccessChecker.fullDiskAccessSettingsURL
+    }
+
+    func checkStatus() -> FullDiskAccessStatus {
+        currentStatus
+    }
+}
+
+private final class CountingPermissionChecker: FullDiskAccessChecking, @unchecked Sendable {
+    private let state: OSAllocatedUnfairLock<(status: FullDiskAccessStatus, count: Int)>
+
+    init(initialStatus: FullDiskAccessStatus) {
+        self.state = OSAllocatedUnfairLock(initialState: (initialStatus, 0))
+    }
+
+    var settingsURL: URL {
+        SystemFullDiskAccessChecker.fullDiskAccessSettingsURL
+    }
+
+    var currentStatus: FullDiskAccessStatus {
+        get { state.withLock { $0.status } }
+        set { state.withLock { $0.status = newValue } }
+    }
+
+    var checkCount: Int {
+        state.withLock { $0.count }
+    }
+
+    func checkStatus() -> FullDiskAccessStatus {
+        state.withLock { box in
+            box.count += 1
+            return box.status
         }
     }
-
-    func waitUntilStarted() async {
-        while !started {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-    }
-
-    func resume(with entries: [TrashHistoryEntry]) {
-        continuation?.resume(returning: entries)
-        continuation = nil
-    }
-
-    func append(_ newEntries: [TrashHistoryEntry]) async {}
-    func remove(ids: Set<UUID>) async {}
 }
 
 private actor FakeScanningService: ScanningServicing {

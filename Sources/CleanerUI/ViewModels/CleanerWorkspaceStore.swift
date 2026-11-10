@@ -89,30 +89,90 @@ public final class CleanerWorkspaceStore {
     public var pendingDeletionItems: [ScannedItem] = []
     public var lastExecutionReport: DeletionExecutionReport?
     public var statusBannerMessage: String?
+    public var permissionStatus: FullDiskAccessStatus
+    public var onPermissionStatusDidChange: (@MainActor (FullDiskAccessStatus) -> Void)?
 
     private let scanner: any ScanningServicing
     private let deleter: any DeletionServicing
     private let historyStore: any HistoryStoring
     private let previewService: any PreviewServicing
+    private let permissionChecker: any FullDiskAccessChecking
+    private let openURLHandler: @MainActor (URL) -> Bool
 
     private var savedCheckpoint: ScanCheckpoint?
     private var activeScanID = UUID()
     private let cancellationBag = WorkspaceCancellationBag()
+    private let activationObserver = ApplicationActivationObserver()
 
     public init(
         scanner: any ScanningServicing,
         deleter: any DeletionServicing,
         historyStore: any HistoryStoring,
-        previewService: any PreviewServicing = PreviewService()
+        previewService: any PreviewServicing = PreviewService(),
+        permissionChecker: any FullDiskAccessChecking = SystemFullDiskAccessChecker(),
+        notificationCenter: NotificationCenter = .default,
+        openURLHandler: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         self.scanner = scanner
         self.deleter = deleter
         self.historyStore = historyStore
         self.previewService = previewService
+        self.permissionChecker = permissionChecker
+        self.openURLHandler = openURLHandler
+        self.permissionStatus = permissionChecker.checkStatus()
+        self.activationObserver.observeApplicationActivation(on: notificationCenter) { [weak self] in
+            self?.refreshPermissionStatus()
+        }
     }
 
     deinit {
         cancellationBag.cancelAll()
+        activationObserver.invalidate()
+    }
+
+    @discardableResult
+    public func refreshPermissionStatus() -> FullDiskAccessStatus {
+        let updated = permissionChecker.checkStatus()
+        updatePermissionState(updated)
+        onPermissionStatusDidChange?(updated)
+        return updated
+    }
+
+    public func applyPermissionStatus(_ updated: FullDiskAccessStatus) {
+        updatePermissionState(updated)
+    }
+
+    @discardableResult
+    public func openFullDiskAccessSettings() -> Bool {
+        openURLHandler(permissionChecker.settingsURL)
+    }
+
+    public var isLimitedScanBannerVisible: Bool {
+        guard let banner = statusBannerMessage else { return false }
+        return banner.hasPrefix("Limited scan mode:") && !permissionStatus.isGranted
+    }
+
+    public func handleWelcomeDismissed(completed: Bool, permissionStatus status: FullDiskAccessStatus? = nil) {
+        let resolved: FullDiskAccessStatus
+        if let status {
+            updatePermissionState(status)
+            resolved = status
+        } else {
+            resolved = refreshPermissionStatus()
+        }
+        guard !resolved.isGranted else { return }
+        if !completed {
+            statusBannerMessage = "Limited scan mode: Full Disk Access is not granted, so protected folders (Mail, Safari, Messages) will be skipped safely."
+        }
+    }
+
+    private func updatePermissionState(_ updated: FullDiskAccessStatus) {
+        permissionStatus = updated
+        if updated.isGranted,
+           let banner = statusBannerMessage,
+           banner.hasPrefix("Limited scan mode:") {
+            statusBannerMessage = nil
+        }
     }
 
     public func loadInitialHistory() async {
@@ -486,6 +546,13 @@ public final class CleanerWorkspaceStore {
         if let first = visibleItems.first, selection.focusedID == nil {
             selection.handleClick(id: first.id, modifiers: [], orderedIDs: visibleItems.map(\.id))
             refreshPreviewForFocus()
+        }
+        if !outcome.wasCancelled,
+           outcome.progress.skippedProtectedDirectories > 0,
+           !refreshPermissionStatus().isGranted,
+           statusBannerMessage == nil {
+            let folderWord = outcome.progress.skippedProtectedDirectories == 1 ? "folder" : "folders"
+            statusBannerMessage = "Limited scan mode: Skipped \(outcome.progress.skippedProtectedDirectories) protected \(folderWord) without Full Disk Access."
         }
         await refreshVolumeStorage()
     }
