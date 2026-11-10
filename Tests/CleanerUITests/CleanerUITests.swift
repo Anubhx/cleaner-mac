@@ -529,6 +529,45 @@ struct CleanerUITests {
         _ = CleanerRootView(store: store).environment(\.cleanerReduceTransparencyOverride, true)
         _ = ResultsListView(store: store, category: .duplicates).environment(\.cleanerReduceTransparencyOverride, true)
     }
+
+    @Test("Inspector action deck fits within minimum 340pt column width without clipping Permanently Delete")
+    @MainActor
+    func inspectorFooterFitsWithinMinimumColumnWidth() {
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+        let item = ScannedItem(
+            url: URL(fileURLWithPath: "/Users/alice/Downloads/icon.png"),
+            name: "icon.png",
+            logicalSize: 30_400_000,
+            allocatedSize: 30_400_000,
+            isDirectory: false,
+            modifiedDate: Date(),
+            category: .duplicates,
+            risk: RiskAssessment(level: .moderate, reason: "Exact SHA-256 content duplicate; verify references before removing."),
+            isRecommendedKeep: false
+        )
+        let host = NSHostingView(
+            rootView: PreviewPaneView(
+                item: item,
+                payload: nil,
+                isLoading: false,
+                isChecked: true,
+                onToggleCheck: {},
+                onTrashFocused: {},
+                onPermanentDeleteFocused: {}
+            )
+            .frame(width: 340, height: 740)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 740),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+
+        #expect(host.fittingSize.width <= 340)
+    }
 }
 
 private actor FakeScanningService: ScanningServicing {

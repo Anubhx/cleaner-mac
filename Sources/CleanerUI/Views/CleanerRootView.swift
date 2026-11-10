@@ -37,7 +37,7 @@ public struct CleanerRootView: View {
                     }
                 }
             )
-            .inspectorColumnWidth(min: 310, ideal: 360, max: 440)
+            .inspectorColumnWidth(min: 340, ideal: 380, max: 460)
         }
         .searchable(text: $store.searchQuery, placement: .toolbar, prompt: "Filter filename or path")
         .toolbar { toolbarItems }

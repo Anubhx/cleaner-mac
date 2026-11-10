@@ -25,6 +25,11 @@ public struct ResultRowView: View {
 
     public var body: some View {
         HStack(spacing: CleanerSpacing.sm) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(leftBarColor)
+                .frame(width: 3, height: 32)
+                .accessibilityHidden(true)
+
             Toggle(isOn: Binding(
                 get: { isChecked },
                 set: { _ in onToggleCheck() }
@@ -43,28 +48,11 @@ public struct ResultRowView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: CleanerSpacing.xxs) {
-                HStack(spacing: CleanerSpacing.xs) {
-                    Text(item.name)
-                        .font(CleanerTypography.body)
-                        .fontWeight(isHighlighted ? .semibold : .regular)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    if item.isRecommendedKeep {
-                        KeepOriginalBadge()
-                    } else {
-                        RiskBadge(risk: item.risk)
-                    }
-
-                    if let deadKind = item.deadKind {
-                        Text(deadKind.displayLabel)
-                            .font(CleanerTypography.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.xs))
-                    }
-                }
+                Text(item.name)
+                    .font(CleanerTypography.body)
+                    .fontWeight(isHighlighted ? .semibold : .regular)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 HStack(spacing: CleanerSpacing.xs) {
                     Text(item.url.deletingLastPathComponent().path)
@@ -73,8 +61,18 @@ public struct ResultRowView: View {
                         .lineLimit(1)
                         .truncationMode(.head)
 
+                    if item.isRecommendedKeep {
+                        Text("· Keep Original")
+                            .font(CleanerTypography.caption)
+                            .foregroundStyle(CleanerColors.safe)
+                    } else if let deadKind = item.deadKind {
+                        Text("· \(deadKind.displayLabel)")
+                            .font(CleanerTypography.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     if let modified = item.modifiedDate {
-                        Text("Modified \(modified.formatted(date: .abbreviated, time: .omitted))")
+                        Text("· Modified \(modified.formatted(date: .abbreviated, time: .omitted))")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -89,6 +87,9 @@ public struct ResultRowView: View {
         }
         .padding(.horizontal, CleanerSpacing.sm)
         .padding(.vertical, CleanerSpacing.xs)
+        .help(item.isRecommendedKeep
+              ? "Keep Original — \(item.risk.reason)"
+              : "\(item.risk.level.label) — \(item.risk.reason)")
         .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: CleanerRadii.sm)
@@ -110,6 +111,20 @@ public struct ResultRowView: View {
             if !item.isRecommendedKeep {
                 onToggleCheck()
             }
+        }
+    }
+
+    private var leftBarColor: Color {
+        if item.isRecommendedKeep {
+            return CleanerColors.safe
+        }
+        switch item.risk.level {
+        case .low:
+            return CleanerColors.safe.opacity(0.55)
+        case .moderate:
+            return CleanerColors.caution
+        case .high:
+            return CleanerColors.danger
         }
     }
 

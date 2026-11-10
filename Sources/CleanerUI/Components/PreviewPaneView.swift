@@ -35,15 +35,21 @@ public struct PreviewPaneView: View {
     public var body: some View {
         Group {
             if let item {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: CleanerSpacing.md) {
-                        headerSection(item: item)
-                        previewStage(item: item)
-                        safetySection(item: item)
-                        metadataSection(item: item)
-                        actionFooter(item: item)
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: CleanerSpacing.md) {
+                            headerSection(item: item)
+                            previewStage(item: item)
+                            safetySection(item: item)
+                            metadataSection(item: item)
+                        }
+                        .padding(CleanerSpacing.md)
                     }
-                    .padding(CleanerSpacing.md)
+
+                    Divider()
+
+                    actionFooter(item: item)
+                        .padding(CleanerSpacing.md)
                 }
             } else {
                 emptyPreviewState
@@ -58,7 +64,7 @@ public struct PreviewPaneView: View {
         VStack(alignment: .leading, spacing: CleanerSpacing.xs) {
             HStack(alignment: .top) {
                 Text(item.name)
-                    .font(CleanerTypography.titleSection())
+                    .font(CleanerTypography.titleLarge())
                     .lineLimit(2)
                     .textSelection(.enabled)
 
@@ -222,6 +228,7 @@ public struct PreviewPaneView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CleanerSpacing.sm)
         .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
         .overlay(
@@ -235,7 +242,7 @@ public struct PreviewPaneView: View {
         let meta = payload?.metadata
         VStack(alignment: .leading, spacing: CleanerSpacing.xs) {
             Text("File Metadata")
-                .font(CleanerTypography.headline)
+                .font(CleanerTypography.titleSection())
 
             Grid(alignment: .leading, horizontalSpacing: CleanerSpacing.md, verticalSpacing: 6) {
                 metadataRow("Logical Size", ByteFormatting.string(from: meta?.logicalSize ?? item.logicalSize))
@@ -258,6 +265,7 @@ public struct PreviewPaneView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CleanerSpacing.sm)
         .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
         .overlay(
@@ -282,31 +290,37 @@ public struct PreviewPaneView: View {
     @ViewBuilder
     private func actionFooter(item: ScannedItem) -> some View {
         VStack(spacing: CleanerSpacing.xs) {
-            HStack(spacing: CleanerSpacing.xs) {
-                Button(isChecked ? "Deselect from Batch" : "Select for Batch", action: onToggleCheck)
-                    .buttonStyle(.bordered)
-                    .disabled(item.isRecommendedKeep)
-
-                Spacer()
-
-                Button(action: onTrashFocused) {
-                    Label("Move to Trash", systemImage: "trash")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(item.isRecommendedKeep)
+            Button(action: onTrashFocused) {
+                Label("Move to Trash", systemImage: "trash")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(item.isRecommendedKeep)
 
-            HStack {
-                Spacer()
+            HStack(spacing: CleanerSpacing.xs) {
+                Button(action: onToggleCheck) {
+                    Label(isChecked ? "In Batch" : "Add to Batch", systemImage: isChecked ? "checkmark.circle.fill" : "plus.circle")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .fixedSize(horizontal: true, vertical: false)
+                .disabled(item.isRecommendedKeep)
+
+                Spacer(minLength: CleanerSpacing.xs)
+
                 Button(role: .destructive, action: onPermanentDeleteFocused) {
                     Label("Permanently Delete…", systemImage: "trash.slash")
+                        .lineLimit(1)
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(CleanerColors.danger)
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .fixedSize(horizontal: true, vertical: false)
+                .foregroundStyle(item.isRecommendedKeep ? Color.secondary.opacity(0.6) : CleanerColors.danger)
                 .disabled(item.isRecommendedKeep)
             }
         }
-        .padding(.top, CleanerSpacing.xs)
     }
 
     private var emptyPreviewState: some View {
