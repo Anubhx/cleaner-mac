@@ -4,20 +4,24 @@ import CleanerCore
 
 public struct ScanSettingsView: View {
     @Bindable var store: CleanerWorkspaceStore
+    let showsHeader: Bool
 
-    public init(store: CleanerWorkspaceStore) {
+    public init(store: CleanerWorkspaceStore, showsHeader: Bool = true) {
         self.store = store
+        self.showsHeader = showsHeader
     }
 
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CleanerSpacing.lg) {
-                VStack(alignment: .leading, spacing: CleanerSpacing.xxs) {
-                    Text("Scan & Safety Settings")
-                        .font(CleanerTypography.titleLarge())
-                    Text("All scanning runs locally on this Mac with zero network requests or telemetry.")
-                        .font(CleanerTypography.callout)
-                        .foregroundStyle(.secondary)
+                if showsHeader {
+                    VStack(alignment: .leading, spacing: CleanerSpacing.xxs) {
+                        Text("Scan & Safety Settings")
+                            .font(CleanerTypography.titleLarge())
+                        Text("All scanning runs locally on this Mac with zero network requests or telemetry.")
+                            .font(CleanerTypography.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 folderSection(

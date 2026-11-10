@@ -420,6 +420,42 @@ struct CleanerUITests {
         #expect(store.isScanning == false)
         #expect(store.progress.phase == .completed)
     }
+
+    @Test("Routes @FocusedValue command actions, guards Keep Originals, and instantiates headless Settings view")
+    @MainActor
+    func focusedValueCommandsAndSettingsSceneView() async {
+        let keepItem = makeItem(name: "orig.dmg", size: 500, category: .duplicates, keep: true)
+        let removableItem = makeItem(name: "copy.dmg", size: 500, category: .duplicates, keep: false)
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome(itemsByCategory: [.duplicates: [keepItem, removableItem]])),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService()
+        )
+        store.selectedSidebarDestination = .category(.duplicates)
+        await store.startScan()
+
+        // Focused Keep Original cannot be checked or trashed via Cleanup menu commands
+        store.clickRow(keepItem, modifiers: [])
+        #expect(store.canToggleHighlightedChecks == false)
+        store.requestTrashSelectionOrFocused()
+        #expect(store.showingTrashConfirmation == false)
+
+        // Focused removable item supports Toggle Selection Check & Move to Trash
+        store.clickRow(removableItem, modifiers: [])
+        #expect(store.canToggleHighlightedChecks == true)
+        store.toggleHighlightedChecks()
+        #expect(store.selection.checkedIDs == [removableItem.id])
+        store.copyFocusedPath()
+        #expect(NSPasteboard.general.string(forType: .string) == removableItem.url.path)
+
+        store.requestTrashSelectionOrFocused()
+        #expect(store.showingTrashConfirmation == true)
+        #expect(store.pendingDeletionItems == [removableItem])
+
+        // Headless Settings scene view instantiates cleanly
+        _ = ScanSettingsView(store: store, showsHeader: false).body
+    }
 }
 
 private actor FakeScanningService: ScanningServicing {

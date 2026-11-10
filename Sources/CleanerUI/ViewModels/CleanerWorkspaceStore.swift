@@ -1,9 +1,21 @@
 import Foundation
 import os
+import AppKit
 import SwiftUI
 import Observation
 import CleanerCore
 import CleanerPreview
+
+private struct WorkspaceStoreFocusedKey: FocusedValueKey {
+    typealias Value = CleanerWorkspaceStore
+}
+
+public extension FocusedValues {
+    var workspaceStore: CleanerWorkspaceStore? {
+        get { self[WorkspaceStoreFocusedKey.self] }
+        set { self[WorkspaceStoreFocusedKey.self] = newValue }
+    }
+}
 
 private final class WorkspaceCancellationBag: Sendable {
     private let tasks = OSAllocatedUnfairLock(initialState: [String: Task<Void, Never>]())
@@ -324,8 +336,40 @@ public final class CleanerWorkspaceStore {
         selection.toggleCheck(id: item.id)
     }
 
+    public var canToggleHighlightedChecks: Bool {
+        visibleItems.contains { selection.highlightedIDs.contains($0.id) && !$0.isRecommendedKeep }
+    }
+
     public func toggleHighlightedChecks() {
         selection.toggleCheckedForHighlighted(items: visibleItems)
+    }
+
+    public func revealFocusedInFinder() {
+        guard let url = focusedItem?.url else { return }
+        revealInFinder(url: url)
+    }
+
+    public func copyFocusedPath() {
+        guard let url = focusedItem?.url else { return }
+        copyPath(url: url)
+    }
+
+    public func revealInFinder(url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    public func copyPath(url: URL) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(url.path, forType: .string)
+    }
+
+    public func requestTrashSelectionOrFocused() {
+        if !checkedItemsInAllCategories.isEmpty {
+            requestBatchTrash()
+        } else if let item = focusedItem, !item.isRecommendedKeep {
+            requestSingleTrash(item: item)
+        }
     }
 
     public func refreshPreviewForFocus() {

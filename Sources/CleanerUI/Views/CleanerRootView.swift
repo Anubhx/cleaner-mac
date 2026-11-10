@@ -84,6 +84,7 @@ public struct CleanerRootView: View {
             }
         }
         .frame(minWidth: 980, minHeight: 640)
+        .focusedSceneValue(\.workspaceStore, store)
     }
 
     private var sidebarContent: some View {
