@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "build-macos-apps": {
+      "source": "glittercowboy/taches-cc-resources",
+      "sourceType": "github",
+      "skillPath": "skills/expertise/macos-apps/SKILL.md",
+      "computedHash": "65d43c706537435fa0b657e8bdc1a2a3a8b983ffd33fec480d6070e46017bddd"
+    },
     "clean-code": {
       "source": "sickn33/antigravity-awesome-skills",
       "ref": "main",
