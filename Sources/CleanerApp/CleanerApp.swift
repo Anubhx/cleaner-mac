@@ -25,6 +25,7 @@ final class CleanerAppDelegate: NSObject, NSApplicationDelegate {
 struct CleanerMacApp: App {
     @NSApplicationDelegateAdaptor(CleanerAppDelegate.self) private var appDelegate
     @State private var store: CleanerWorkspaceStore
+    @State private var showLaunchSplash = true
 
     init() {
         InstrumentSerifFontRegistrar.registerBundledFonts()
@@ -41,10 +42,17 @@ struct CleanerMacApp: App {
 
     var body: some Scene {
         WindowGroup("CleanerMac") {
-            CleanerRootView(store: store)
-                .task {
-                    await store.loadInitialHistory()
+            ZStack {
+                CleanerRootView(store: store)
+                    .task {
+                        await store.loadInitialHistory()
+                    }
+
+                if showLaunchSplash {
+                    LaunchSplashView(isPresented: $showLaunchSplash)
+                        .zIndex(1)
                 }
+            }
         }
         .defaultSize(width: 1240, height: 780)
         .commands {

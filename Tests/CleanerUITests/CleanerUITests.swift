@@ -676,6 +676,173 @@ struct CleanerUITests {
 
         #expect(host.fittingSize.width <= 340)
     }
+
+    @Test("Launch splash policy stays under 1s and disables spring/scale/symbol effects under Reduce Motion")
+    func launchSplashPolicyEnforcesDurationAndReduceMotionContract() {
+        let standard = LaunchSplashPolicy.resolve(reduceMotion: false)
+        #expect(standard.reduceMotion == false)
+        #expect(standard.totalDuration >= 0.80)
+        #expect(standard.totalDuration < 1.00)
+        #expect(standard.usesSpringEntrance == true)
+        #expect(standard.usesSymbolReplace == false)
+        #expect(standard.entranceScale < 1.0)
+
+        let reduced = LaunchSplashPolicy.resolve(reduceMotion: true)
+        #expect(reduced.reduceMotion == true)
+        #expect(reduced.totalDuration >= 0.80)
+        #expect(reduced.totalDuration < 1.00)
+        #expect(reduced.usesSpringEntrance == false)
+        #expect(reduced.usesSymbolReplace == false)
+        #expect(reduced.entranceScale == 1.0)
+    }
+
+    @Test("Launch splash stays hit-test transparent, auto-dismisses under 1s, and never gates loadInitialHistory")
+    @MainActor
+    func launchSplashAllowsUnderlyingInteractionAndNonGatedLoad() async {
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+
+        // 1. Hit-test pass-through: verify opaque overlay without allowsHitTesting(false) blocks,
+        //    whereas LaunchSplashView lets pointer hits reach underlying controls at (300, 200)
+        final class HitProbeNSView: NSView {}
+        struct HitProbeRepresentable: NSViewRepresentable {
+            func makeNSView(context: Context) -> HitProbeNSView { HitProbeNSView() }
+            func updateNSView(_ nsView: HitProbeNSView, context: Context) {}
+        }
+
+        let blockingContainer = ZStack {
+            HitProbeRepresentable()
+                .frame(width: 600, height: 400)
+            Color(nsColor: .windowBackgroundColor)
+                .frame(width: 600, height: 400)
+        }
+        let blockingHost = NSHostingView(rootView: blockingContainer)
+        let blockingWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        blockingWindow.isReleasedWhenClosed = false
+        blockingWindow.contentView = blockingHost
+        blockingHost.layoutSubtreeIfNeeded()
+        #expect(!(blockingHost.hitTest(NSPoint(x: 300, y: 200)) is HitProbeNSView))
+        blockingWindow.close()
+
+        let interactiveContainer = ZStack {
+            HitProbeRepresentable()
+                .frame(width: 600, height: 400)
+
+            LaunchSplashView(isPresented: .constant(true), reduceMotionOverride: false)
+                .transition(.opacity)
+        }
+        .frame(width: 600, height: 400)
+
+        let interactiveHost = NSHostingView(rootView: interactiveContainer)
+        let interactiveWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        interactiveWindow.isReleasedWhenClosed = false
+        interactiveWindow.contentView = interactiveHost
+        interactiveHost.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        let hitView = interactiveHost.hitTest(NSPoint(x: 300, y: 200))
+        #expect(hitView is HitProbeNSView)
+        interactiveWindow.close()
+
+        // 2. Non-blocking over live CleanerRootView while loadInitialHistory() is suspended, for both Reduce Motion modes
+        for reduceMotionMode in [false, true] {
+            let suspendedHistory = SuspendableHistoryService()
+            let store = CleanerWorkspaceStore(
+                scanner: FakeScanningService(outcome: ScanOutcome()),
+                deleter: FakeDeletionService(),
+                historyStore: suspendedHistory,
+                previewService: PreviewService()
+            )
+
+            var splashVisible = true
+            let binding = Binding(
+                get: { splashVisible },
+                set: { splashVisible = $0 }
+            )
+
+            let splashRoot = ZStack {
+                CleanerRootView(store: store)
+                if splashVisible {
+                    LaunchSplashView(isPresented: binding, reduceMotionOverride: reduceMotionMode)
+                        .transition(.opacity)
+                        .zIndex(1)
+                }
+            }
+            .frame(width: 1240, height: 780)
+
+            let rootHost = NSHostingView(rootView: splashRoot)
+            let rootWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            rootWindow.isReleasedWhenClosed = false
+            rootWindow.contentView = rootHost
+            rootWindow.orderFront(nil)
+            rootHost.layoutSubtreeIfNeeded()
+
+            // Start loadInitialHistory() concurrently and mutate workspace while overlay is active
+            let historyTask = Task { await store.loadInitialHistory() }
+            await suspendedHistory.waitUntilStarted()
+            store.isDryRunEnabled = true
+            #expect(splashVisible == true)
+            #expect(store.isDryRunEnabled == true)
+
+            let deadline = Date().addingTimeInterval(1.15)
+            while splashVisible && Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(splashVisible == false)
+
+            // Resume history loading only after splash completed to prove splash never gated on it
+            let expectedEntry = TrashHistoryEntry(
+                originalPath: "/Users/alice/Downloads/sample.zip",
+                trashPath: "/Users/alice/.Trash/sample.zip",
+                bytes: 2048,
+                trashInode: 42
+            )
+            await suspendedHistory.resume(with: [expectedEntry])
+            await historyTask.value
+            #expect(store.historyEntries == [expectedEntry])
+            rootWindow.close()
+        }
+    }
+}
+
+private actor SuspendableHistoryService: HistoryStoring {
+    private var started = false
+    private var continuation: CheckedContinuation<[TrashHistoryEntry], Never>?
+
+    func loadEntries() async -> [TrashHistoryEntry] {
+        started = true
+        return await withCheckedContinuation { cont in
+            continuation = cont
+        }
+    }
+
+    func waitUntilStarted() async {
+        while !started {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func resume(with entries: [TrashHistoryEntry]) {
+        continuation?.resume(returning: entries)
+        continuation = nil
+    }
+
+    func append(_ newEntries: [TrashHistoryEntry]) async {}
+    func remove(ids: Set<UUID>) async {}
 }
 
 private actor FakeScanningService: ScanningServicing {
