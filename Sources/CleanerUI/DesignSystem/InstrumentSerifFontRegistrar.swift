@@ -2,14 +2,7 @@ import Foundation
 import CoreText
 
 public enum InstrumentSerifFontRegistrar {
-    private static let lock = NSLock()
-    private nonisolated(unsafe) static var hasRegistered = false
-
-    public static func registerBundledFonts() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !hasRegistered else { return }
-
+    private static let registerOnce: Void = {
         let fontNames = [
             "InstrumentSerif-Regular",
             "InstrumentSerif-Italic",
@@ -25,6 +18,9 @@ public enum InstrumentSerifFontRegistrar {
                 CTFontManagerRegisterFontsForURL(moduleURL as CFURL, .process, nil)
             }
         }
-        hasRegistered = true
+    }()
+
+    public static func registerBundledFonts() {
+        _ = registerOnce
     }
 }

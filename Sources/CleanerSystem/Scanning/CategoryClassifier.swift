@@ -47,35 +47,43 @@ enum CategoryClassifier {
         let homeRoot = configuration.homeOverride ?? safetyGuard.currentUserHome
         let downloadsRoot = configuration.downloadsOverride
             ?? homeRoot.appendingPathComponent("Downloads", isDirectory: true)
-        combined.append(contentsOf: DeadFileScanner.scanBrokenDownloads(
-            downloadsRoot: downloadsRoot,
-            safetyGuard: safetyGuard,
-            excludedFolders: configuration.excludedFolders
-        ))
+        if !Task.isCancelled {
+            combined.append(contentsOf: DeadFileScanner.scanBrokenDownloads(
+                downloadsRoot: downloadsRoot,
+                safetyGuard: safetyGuard,
+                excludedFolders: configuration.excludedFolders
+            ))
+        }
 
         let libraryRoot = configuration.libraryOverride
             ?? homeRoot.appendingPathComponent("Library", isDirectory: true)
         let appRoots = configuration.appSearchRootsOverride ?? InstalledAppIndex.defaultSearchRoots
-        let installedIDs = InstalledAppIndex.installedBundleIDs(in: appRoots)
-        combined.append(contentsOf: DeadFileScanner.scanOrphanedAppData(
-            libraryRoot: libraryRoot,
-            installedBundleIDs: installedIDs,
-            safetyGuard: safetyGuard,
-            excludedFolders: configuration.excludedFolders
-        ))
-        combined.append(contentsOf: DeadFileScanner.scanStaleCaches(
-            libraryRoot: libraryRoot,
-            safetyGuard: safetyGuard,
-            excludedFolders: configuration.excludedFolders,
-            minimumActiveCacheBytes: configuration.minimumActiveCacheBytes
-        ))
-        combined.append(contentsOf: DeadFileScanner.scanDeveloperCaches(
-            homeRoot: homeRoot,
-            libraryRoot: libraryRoot,
-            safetyGuard: safetyGuard,
-            excludedFolders: configuration.excludedFolders,
-            minimumBytes: min(10_485_760, configuration.minimumActiveCacheBytes)
-        ))
+        let installedIDs = Task.isCancelled ? [] : InstalledAppIndex.installedBundleIDs(in: appRoots)
+        if !Task.isCancelled {
+            combined.append(contentsOf: DeadFileScanner.scanOrphanedAppData(
+                libraryRoot: libraryRoot,
+                installedBundleIDs: installedIDs,
+                safetyGuard: safetyGuard,
+                excludedFolders: configuration.excludedFolders
+            ))
+        }
+        if !Task.isCancelled {
+            combined.append(contentsOf: DeadFileScanner.scanStaleCaches(
+                libraryRoot: libraryRoot,
+                safetyGuard: safetyGuard,
+                excludedFolders: configuration.excludedFolders,
+                minimumActiveCacheBytes: configuration.minimumActiveCacheBytes
+            ))
+        }
+        if !Task.isCancelled {
+            combined.append(contentsOf: DeadFileScanner.scanDeveloperCaches(
+                homeRoot: homeRoot,
+                libraryRoot: libraryRoot,
+                safetyGuard: safetyGuard,
+                excludedFolders: configuration.excludedFolders,
+                minimumBytes: min(10_485_760, configuration.minimumActiveCacheBytes)
+            ))
+        }
 
         var seenURLs = Set<URL>()
         return combined

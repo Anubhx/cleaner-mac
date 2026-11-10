@@ -55,6 +55,7 @@ public enum FilesystemProbes {
         var total: UInt64 = 0
         var tracker = HardLinkTracker()
         for case let child as URL in enumerator {
+            if Task.isCancelled { break }
             guard let values = try? child.resourceValues(forKeys: Set(keys)),
                   values.isRegularFile == true else {
                 continue

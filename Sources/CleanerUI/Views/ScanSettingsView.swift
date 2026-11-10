@@ -203,20 +203,24 @@ public struct ScanSettingsView: View {
         )
     }
 
-    private func pickDirectory(prompt: String) -> URL? {
+    @MainActor
+    private func pickDirectory(prompt: String) async -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = prompt
-        return panel.runModal() == .OK ? panel.url : nil
+        let response = await panel.begin()
+        return response == .OK ? panel.url : nil
     }
 
     private func addScanRoot() {
-        guard let url = pickDirectory(prompt: "Add Scan Root") else { return }
-        if !store.configuration.roots.contains(url) {
-            store.configuration.roots.append(url)
-            Task { await store.refreshVolumeStorage() }
+        Task {
+            guard let url = await pickDirectory(prompt: "Add Scan Root") else { return }
+            if !store.configuration.roots.contains(url) {
+                store.configuration.roots.append(url)
+                await store.refreshVolumeStorage()
+            }
         }
     }
 
@@ -227,9 +231,11 @@ public struct ScanSettingsView: View {
     }
 
     private func addExcludedFolder() {
-        guard let url = pickDirectory(prompt: "Exclude Folder") else { return }
-        if !store.configuration.excludedFolders.contains(url.path) {
-            store.configuration.excludedFolders.append(url.path)
+        Task {
+            guard let url = await pickDirectory(prompt: "Exclude Folder") else { return }
+            if !store.configuration.excludedFolders.contains(url.path) {
+                store.configuration.excludedFolders.append(url.path)
+            }
         }
     }
 

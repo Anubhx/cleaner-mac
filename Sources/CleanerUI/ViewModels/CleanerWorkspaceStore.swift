@@ -1,8 +1,41 @@
 import Foundation
+import os
 import SwiftUI
 import Observation
 import CleanerCore
 import CleanerPreview
+
+private final class WorkspaceCancellationBag: Sendable {
+    private let tasks = OSAllocatedUnfairLock(initialState: [String: Task<Void, Never>]())
+
+    func replace(_ key: String, with task: Task<Void, Never>?) {
+        let previous = tasks.withLock { store in
+            let old = store[key]
+            if let task {
+                store[key] = task
+            } else {
+                store.removeValue(forKey: key)
+            }
+            return old
+        }
+        previous?.cancel()
+    }
+
+    func cancel(_ key: String) {
+        replace(key, with: nil)
+    }
+
+    func cancelAll() {
+        let all = tasks.withLock { store -> [Task<Void, Never>] in
+            let values = Array(store.values)
+            store.removeAll()
+            return values
+        }
+        for task in all {
+            task.cancel()
+        }
+    }
+}
 
 public enum SidebarDestination: Hashable, Sendable {
     case category(ScanCategory)
@@ -48,23 +81,26 @@ public final class CleanerWorkspaceStore {
     private let scanner: any ScanningServicing
     private let deleter: any DeletionServicing
     private let historyStore: any HistoryStoring
-    private let previewService: PreviewService
+    private let previewService: any PreviewServicing
 
     private var savedCheckpoint: ScanCheckpoint?
-    private var scanRunnerTask: Task<Void, Never>?
-    private var streamListenerTask: Task<Void, Never>?
-    private var previewTask: Task<Void, Never>?
+    private var activeScanID = UUID()
+    private let cancellationBag = WorkspaceCancellationBag()
 
     public init(
         scanner: any ScanningServicing,
         deleter: any DeletionServicing,
         historyStore: any HistoryStoring,
-        previewService: PreviewService = PreviewService()
+        previewService: any PreviewServicing = PreviewService()
     ) {
         self.scanner = scanner
         self.deleter = deleter
         self.historyStore = historyStore
         self.previewService = previewService
+    }
+
+    deinit {
+        cancellationBag.cancelAll()
     }
 
     public func loadInitialHistory() async {
@@ -73,8 +109,11 @@ public final class CleanerWorkspaceStore {
     }
 
     public func refreshVolumeStorage() async {
-        let root = configuration.roots.first ?? FileManager.default.homeDirectoryForCurrentUser
-        volumeStorage = await scanner.volumeStorageSnapshot(for: root)
+        let expectedRoot = configuration.roots.first ?? FileManager.default.homeDirectoryForCurrentUser
+        let snapshot = await scanner.volumeStorageSnapshot(for: expectedRoot)
+        let currentRoot = configuration.roots.first ?? FileManager.default.homeDirectoryForCurrentUser
+        guard expectedRoot == currentRoot else { return }
+        volumeStorage = snapshot
     }
 
     public func items(for category: ScanCategory) -> [ScannedItem] {
@@ -192,22 +231,27 @@ public final class CleanerWorkspaceStore {
     }
 
     public func startScan() async {
-        scanRunnerTask?.cancel()
-        streamListenerTask?.cancel()
+        let scanID = UUID()
+        activeScanID = scanID
+        cancellationBag.cancel("stream")
+        cancellationBag.cancel("preview")
 
         itemsByCategory = [:]
         duplicateGroups = []
         selection = MultiSelectState()
         previewPayload = nil
+        isLoadingPreview = false
         savedCheckpoint = nil
         isScanning = true
         isPaused = false
         progress = ScanProgress(phase: .enumerating, currentPath: "Preparing scan…")
 
         let stream = await scanner.makeProgressStream()
-        streamListenerTask = Task { @MainActor [weak self] in
+        guard activeScanID == scanID else { return }
+
+        let streamTask = Task { @MainActor [weak self] in
             for await batch in stream {
-                guard let self else { break }
+                guard !Task.isCancelled, let self, self.activeScanID == scanID else { break }
                 self.progress = batch.progress
                 if !batch.items.isEmpty {
                     for item in batch.items {
@@ -220,31 +264,37 @@ public final class CleanerWorkspaceStore {
                 }
             }
         }
+        cancellationBag.replace("stream", with: streamTask)
 
         let outcome = await scanner.runFullScan(configuration: configuration)
-        await applyCompletedOutcome(outcome)
+        await applyCompletedOutcome(outcome, for: scanID)
     }
 
     public func pauseScan() async {
         guard isScanning, !isPaused else { return }
+        let scanID = activeScanID
         let checkpoint = await scanner.pause()
-        guard isScanning else { return }
+        guard isScanning, activeScanID == scanID else { return }
         savedCheckpoint = checkpoint
         isPaused = true
         progress.phase = .paused
     }
 
     public func resumeScan() async {
-        guard let savedCheckpoint else { return }
+        guard let checkpoint = savedCheckpoint else { return }
+        let scanID = activeScanID
         isPaused = false
         isScanning = true
-        let outcome = await scanner.resume(from: savedCheckpoint)
-        await applyCompletedOutcome(outcome)
+        let outcome = await scanner.resume(from: checkpoint)
+        await applyCompletedOutcome(outcome, for: scanID)
     }
 
     public func cancelScan() async {
+        let scanID = UUID()
+        activeScanID = scanID
+        cancellationBag.cancel("stream")
         let outcome = await scanner.cancel()
-        streamListenerTask?.cancel()
+        guard activeScanID == scanID else { return }
         isScanning = false
         isPaused = false
         savedCheckpoint = nil
@@ -279,20 +329,21 @@ public final class CleanerWorkspaceStore {
     }
 
     public func refreshPreviewForFocus() {
-        previewTask?.cancel()
         guard let item = focusedItem else {
+            cancellationBag.cancel("preview")
             previewPayload = nil
             isLoadingPreview = false
             return
         }
         isLoadingPreview = true
-        previewTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let payload = await self.previewService.loadPreview(for: item)
-            guard !Task.isCancelled, self.focusedItem?.id == item.id else { return }
+        let service = previewService
+        let task = Task { @MainActor [weak self] in
+            let payload = await service.loadPreview(for: item)
+            guard !Task.isCancelled, let self, self.focusedItem?.id == item.id else { return }
             self.previewPayload = payload
             self.isLoadingPreview = false
         }
+        cancellationBag.replace("preview", with: task)
     }
 
     public func requestBatchTrash() {
@@ -369,11 +420,13 @@ public final class CleanerWorkspaceStore {
         }
     }
 
-    private func applyCompletedOutcome(_ outcome: ScanOutcome) async {
+    private func applyCompletedOutcome(_ outcome: ScanOutcome, for scanID: UUID) async {
+        guard activeScanID == scanID else { return }
         if outcome.progress.phase == .paused {
             progress = outcome.progress
             return
         }
+        cancellationBag.cancel("stream")
         isScanning = false
         isPaused = false
         savedCheckpoint = nil

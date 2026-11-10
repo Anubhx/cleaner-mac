@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 import UniformTypeIdentifiers
-import QuickLookThumbnailing
+@preconcurrency import QuickLookThumbnailing
 import CleanerCore
 
 enum MetadataSnapshotProvider {
@@ -25,7 +25,7 @@ enum MetadataSnapshotProvider {
 
         let posix = readPOSIXPermissions(at: url)
         let xattrs = readExtendedAttributes(at: url)
-        let thumbnail = await generateQuickLookThumbnail(for: url)
+        let thumbnail = Task.isCancelled ? nil : await generateQuickLookThumbnail(for: url)
 
         return FileMetadataSnapshot(
             url: url,
@@ -70,12 +70,17 @@ enum MetadataSnapshotProvider {
     }
 
     private static func generateQuickLookThumbnail(for url: URL) async -> CGImage? {
+        guard !Task.isCancelled else { return nil }
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
             size: CGSize(width: 240, height: 240),
             scale: 2.0,
             representationTypes: .all
         )
-        return try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).cgImage
+        return await withTaskCancellationHandler {
+            try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).cgImage
+        } onCancel: {
+            QLThumbnailGenerator.shared.cancel(request)
+        }
     }
 }

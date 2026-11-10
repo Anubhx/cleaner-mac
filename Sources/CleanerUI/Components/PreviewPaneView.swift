@@ -336,18 +336,30 @@ public struct PreviewPaneView: View {
 private struct PDFKitRepresentable: NSViewRepresentable {
     let url: URL
 
+    final class Coordinator {
+        var loadedURL: URL?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.backgroundColor = .clear
-        view.document = PDFDocument(url: url)
+        let normalized = url.standardizedFileURL
+        view.document = PDFDocument(url: normalized)
+        context.coordinator.loadedURL = normalized
         return view
     }
 
     func updateNSView(_ nsView: PDFView, context: Context) {
-        if nsView.document?.documentURL != url {
-            nsView.document = PDFDocument(url: url)
+        let normalized = url.standardizedFileURL
+        if context.coordinator.loadedURL != normalized {
+            nsView.document = PDFDocument(url: normalized)
+            context.coordinator.loadedURL = normalized
         }
     }
 }
@@ -355,6 +367,7 @@ private struct PDFKitRepresentable: NSViewRepresentable {
 private struct AudioMetadataCardView: View {
     let data: AudioPreviewData
     @State private var player: AVPlayer?
+    @State private var playbackSessionID: UUID?
     @State private var isPlaying = false
 
     var body: some View {
@@ -395,22 +408,44 @@ private struct AudioMetadataCardView: View {
             .controlSize(.small)
         }
         .padding(CleanerSpacing.md)
+        .onChange(of: data.url) { _, _ in
+            stopPlayback()
+        }
         .onDisappear {
-            player?.pause()
-            player = nil
-            isPlaying = false
+            stopPlayback()
+        }
+        .task(id: playbackSessionID) {
+            guard playbackSessionID != nil,
+                  let playerItem = player?.currentItem else { return }
+            let notifications = NotificationCenter.default.notifications(
+                named: .AVPlayerItemDidPlayToEndTime,
+                object: playerItem
+            )
+            for await _ in notifications {
+                guard !Task.isCancelled else { break }
+                stopPlayback()
+                break
+            }
         }
     }
 
     private func togglePlayback() {
         if isPlaying {
-            player?.pause()
-            isPlaying = false
+            stopPlayback()
         } else {
+            stopPlayback()
             let p = AVPlayer(url: data.url)
             player = p
+            playbackSessionID = UUID()
             p.play()
             isPlaying = true
         }
+    }
+
+    private func stopPlayback() {
+        player?.pause()
+        player = nil
+        playbackSessionID = nil
+        isPlaying = false
     }
 }

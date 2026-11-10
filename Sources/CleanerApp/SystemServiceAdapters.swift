@@ -4,7 +4,7 @@ import CleanerSystem
 import CleanerUI
 
 extension ScanCoordinator: ScanningServicing {
-    public func volumeStorageSnapshot(for root: URL) async -> VolumeStorageSnapshot? {
+    nonisolated public func volumeStorageSnapshot(for root: URL) async -> VolumeStorageSnapshot? {
         FilesystemProbes.volumeStorageSnapshot(for: root)
     }
 }

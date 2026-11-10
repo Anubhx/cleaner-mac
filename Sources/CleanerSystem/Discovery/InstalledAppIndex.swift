@@ -14,6 +14,7 @@ public enum InstalledAppIndex {
         let fm = FileManager.default
 
         for root in roots {
+            if Task.isCancelled { break }
             guard fm.fileExists(atPath: root.path) else { continue }
             guard let enumerator = fm.enumerator(
                 at: root,
@@ -22,6 +23,7 @@ public enum InstalledAppIndex {
             ) else { continue }
 
             for case let candidate as URL in enumerator {
+                if Task.isCancelled { break }
                 guard candidate.pathExtension.lowercased() == "app" else { continue }
                 enumerator.skipDescendants()
 

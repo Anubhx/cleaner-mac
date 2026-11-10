@@ -7,7 +7,7 @@ public struct PreviewService: Sendable {
 
     public func loadPreview(for item: ScannedItem) async -> PreviewPayload {
         let metadata = await MetadataSnapshotProvider.capture(for: item)
-        if item.isDirectory {
+        if item.isDirectory || Task.isCancelled {
             return PreviewPayload(content: .fallback, metadata: metadata)
         }
 

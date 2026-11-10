@@ -362,6 +362,64 @@ struct CleanerUITests {
             onRescan: {}
         ).body
     }
+
+    @Test("Workspace store releases cleanly during suspended preview load and cancels preview task on deinit")
+    @MainActor
+    func workspaceDeallocatesDuringInFlightPreviewLoad() async {
+        let previewService = SuspendablePreviewService()
+        let item = makeItem(name: "huge-video.mov", size: 4_096, category: .largeFiles)
+        weak var weakStore: CleanerWorkspaceStore?
+
+        do {
+            let store = CleanerWorkspaceStore(
+                scanner: FakeScanningService(outcome: ScanOutcome(itemsByCategory: [.largeFiles: [item]])),
+                deleter: FakeDeletionService(),
+                historyStore: FakeHistoryService(),
+                previewService: previewService
+            )
+            weakStore = store
+            store.selectedSidebarDestination = .category(.largeFiles)
+            store.itemsByCategory[.largeFiles] = [item]
+            store.clickRow(item, modifiers: [])
+            await previewService.waitUntilStarted()
+        }
+
+        await Task.yield()
+        #expect(weakStore == nil)
+        #expect(await previewService.wasCancelled == true)
+    }
+
+    @Test("Overlapping startScan prevents stale scan outcome from overwriting newer scan results")
+    @MainActor
+    func overlappingStartScanIgnoresStaleOutcome() async {
+        let staleItem = makeItem(name: "stale.iso", size: 100, category: .largeFiles)
+        let freshItem = makeItem(name: "fresh.iso", size: 900, category: .largeFiles)
+        let scanner = OverlappingGenerationsFakeScanner(staleItem: staleItem, freshItem: freshItem)
+
+        let store = CleanerWorkspaceStore(
+            scanner: scanner,
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService()
+        )
+        store.selectedSidebarDestination = .category(.largeFiles)
+
+        let firstScanTask = Task { await store.startScan() }
+        await scanner.waitUntilFirstScanSuspended()
+
+        let secondScanTask = Task { await store.startScan() }
+        await secondScanTask.value
+
+        #expect(store.items(for: .largeFiles).map(\.name) == ["fresh.iso"])
+        #expect(store.isScanning == false)
+
+        await scanner.releaseFirstScan()
+        await firstScanTask.value
+
+        #expect(store.items(for: .largeFiles).map(\.name) == ["fresh.iso"])
+        #expect(store.isScanning == false)
+        #expect(store.progress.phase == .completed)
+    }
 }
 
 private actor FakeScanningService: ScanningServicing {
@@ -504,5 +562,123 @@ private actor ControllableFakeScanner: ScanningServicing {
         gate?.resume(returning: out)
         gate = nil
         return out
+    }
+}
+
+private actor SuspendablePreviewService: PreviewServicing {
+    private var started = false
+    private(set) var wasCancelled = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func loadPreview(for item: ScannedItem) async -> PreviewPayload {
+        started = true
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { cont in
+                if Task.isCancelled {
+                    wasCancelled = true
+                    cont.resume()
+                } else {
+                    continuation = cont
+                }
+            }
+        } onCancel: {
+            Task { await markCancelledAndResume() }
+        }
+        let snapshot = FileMetadataSnapshot(
+            url: item.url,
+            utiIdentifier: "public.data",
+            kindDescription: "Document",
+            logicalSize: item.logicalSize,
+            allocatedSize: item.allocatedSize,
+            createdDate: nil,
+            modifiedDate: nil,
+            accessedDate: nil,
+            posixPermissions: "rw-r--r--",
+            linkCount: 1,
+            extendedAttributes: [],
+            thumbnail: nil
+        )
+        return PreviewPayload(content: .fallback, metadata: snapshot)
+    }
+
+    func waitUntilStarted() async {
+        while !started {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    private func markCancelledAndResume() {
+        wasCancelled = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor OverlappingGenerationsFakeScanner: ScanningServicing {
+    private let staleItem: ScannedItem
+    private let freshItem: ScannedItem
+    private var runCount = 0
+    private var firstGate: CheckedContinuation<ScanOutcome, Never>?
+
+    init(staleItem: ScannedItem, freshItem: ScannedItem) {
+        self.staleItem = staleItem
+        self.freshItem = freshItem
+    }
+
+    func makeProgressStream() -> AsyncStream<ScanBatch> {
+        let (stream, cont) = AsyncStream.makeStream(of: ScanBatch.self)
+        cont.finish()
+        return stream
+    }
+
+    func runFullScan(configuration: ScanConfiguration) async -> ScanOutcome {
+        runCount += 1
+        if runCount == 1 {
+            return await withCheckedContinuation { cont in
+                firstGate = cont
+            }
+        }
+        return ScanOutcome(
+            itemsByCategory: [.largeFiles: [freshItem]],
+            progress: ScanProgress(phase: .completed, scannedFiles: 1, bytesEvaluated: freshItem.logicalSize)
+        )
+    }
+
+    func waitUntilFirstScanSuspended() async {
+        while firstGate == nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func releaseFirstScan() {
+        firstGate?.resume(returning: ScanOutcome(
+            itemsByCategory: [.largeFiles: [staleItem]],
+            progress: ScanProgress(phase: .cancelled, scannedFiles: 0, bytesEvaluated: 0),
+            wasCancelled: true
+        ))
+        firstGate = nil
+    }
+
+    func start(configuration: ScanConfiguration) async throws {}
+
+    func pause() async -> ScanCheckpoint {
+        ScanCheckpoint(
+            configuration: ScanConfiguration(),
+            pendingDirectories: [],
+            candidateFiles: [],
+            deadItems: [],
+            visitedDirectoryPaths: [],
+            scannedFiles: 0,
+            bytesEvaluated: 0,
+            startedAt: Date()
+        )
+    }
+
+    func resume(from checkpoint: ScanCheckpoint) async -> ScanOutcome {
+        ScanOutcome(progress: ScanProgress(phase: .completed))
+    }
+
+    func cancel() async -> ScanOutcome {
+        ScanOutcome(progress: ScanProgress(phase: .cancelled), wasCancelled: true)
     }
 }

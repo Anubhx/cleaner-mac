@@ -634,5 +634,97 @@ struct ScanAndDeletionIntegrationTests {
         let deadURLs = Set(outcome.items(in: .deadFiles).map(\.url))
         #expect(deadURLs.contains(npxCache.deletingLastPathComponent().standardizedFileURL))
     }
+
+    @Test("Overlapping restart isolates new progress stream from previous cancelled scan")
+    func overlappingScanRestartIsolatesProgressStream() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        for i in 0..<20 {
+            let dir = sandbox.appendingPathComponent("dir-\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(repeating: 0x1A, count: 4096).write(to: dir.appendingPathComponent("payload.bin"))
+        }
+
+        let config = ScanConfiguration(
+            roots: [sandbox],
+            downloadsOverride: sandbox.appendingPathComponent("Downloads"),
+            libraryOverride: sandbox.appendingPathComponent("Library"),
+            appSearchRootsOverride: [sandbox.appendingPathComponent("Applications")],
+            homeOverride: sandbox,
+            categories: [.largeFiles],
+            largeFileThresholdBytes: 1024
+        )
+        let coordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(5)
+        )
+
+        try await coordinator.start(configuration: config)
+        try await Task.sleep(for: .milliseconds(12))
+
+        let stream2 = await coordinator.makeProgressStream()
+        let stream2PhasesTask = Task<[ScanPhase], Never> {
+            var phases: [ScanPhase] = []
+            for await batch in stream2 {
+                phases.append(batch.progress.phase)
+            }
+            return phases
+        }
+
+        let outcome2 = await coordinator.runFullScan(configuration: config)
+        let phases2 = await stream2PhasesTask.value
+
+        #expect(outcome2.wasCancelled == false)
+        #expect(outcome2.items(in: .largeFiles).count == 20)
+        #expect(!phases2.contains(.cancelled))
+        #expect(phases2.last == .completed)
+    }
+
+    @Test("Cancelling a paused scan finishes its progress stream with cancelled status")
+    func cancelWhilePausedFinishesProgressStream() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        for i in 0..<25 {
+            let dir = sandbox.appendingPathComponent("folder-\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data(repeating: 0x02, count: 2048).write(to: dir.appendingPathComponent("item.dat"))
+        }
+
+        let config = ScanConfiguration(roots: [sandbox], categories: [.largeFiles], largeFileThresholdBytes: 512)
+        let coordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(15)
+        )
+
+        let stream = await coordinator.makeProgressStream()
+        let (enteredSignalStream, enteredContinuation) = AsyncStream.makeStream(of: Void.self)
+        let streamTask = Task<[ScanPhase], Never> {
+            var phases: [ScanPhase] = []
+            var signaled = false
+            for await batch in stream {
+                phases.append(batch.progress.phase)
+                if !signaled && batch.progress.phase == .enumerating {
+                    signaled = true
+                    enteredContinuation.yield(())
+                    enteredContinuation.finish()
+                }
+            }
+            enteredContinuation.finish()
+            return phases
+        }
+
+        try await coordinator.start(configuration: config)
+        for await _ in enteredSignalStream { break }
+        let checkpoint = await coordinator.pause()
+        #expect(!checkpoint.pendingDirectories.isEmpty)
+
+        let outcome = await coordinator.cancel()
+        let phases = await streamTask.value
+        #expect(outcome.wasCancelled == true)
+        #expect(phases.contains(.paused))
+        #expect(phases.last == .cancelled)
+    }
 }
 

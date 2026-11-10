@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public struct FileMetadataSnapshot: @unchecked Sendable {
+public struct FileMetadataSnapshot: Sendable {
     public let url: URL
     public let utiIdentifier: String
     public let kindDescription: String
@@ -44,7 +44,7 @@ public struct FileMetadataSnapshot: @unchecked Sendable {
     }
 }
 
-public struct ImagePreviewData: @unchecked Sendable {
+public struct ImagePreviewData: Sendable {
     public let image: CGImage
     public let pixelWidth: Int
     public let pixelHeight: Int
@@ -58,7 +58,7 @@ public struct ImagePreviewData: @unchecked Sendable {
     }
 }
 
-public struct VideoPreviewData: @unchecked Sendable {
+public struct VideoPreviewData: Sendable {
     public let url: URL
     public let thumbnail: CGImage?
     public let durationSeconds: Double
@@ -147,7 +147,7 @@ public struct AudioPreviewData: Sendable {
     }
 }
 
-public enum PreviewContent: @unchecked Sendable {
+public enum PreviewContent: Sendable {
     case image(ImagePreviewData)
     case video(VideoPreviewData)
     case pdf(PDFPreviewData)
@@ -156,7 +156,7 @@ public enum PreviewContent: @unchecked Sendable {
     case fallback
 }
 
-public struct PreviewPayload: @unchecked Sendable {
+public struct PreviewPayload: Sendable {
     public let content: PreviewContent
     public let metadata: FileMetadataSnapshot
 

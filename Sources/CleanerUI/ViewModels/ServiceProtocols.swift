@@ -1,5 +1,12 @@
 import Foundation
 import CleanerCore
+import CleanerPreview
+
+public protocol PreviewServicing: Sendable {
+    func loadPreview(for item: ScannedItem) async -> PreviewPayload
+}
+
+extension PreviewService: PreviewServicing {}
 
 public protocol ScanningServicing: Sendable {
     func makeProgressStream() async -> AsyncStream<ScanBatch>

@@ -62,6 +62,38 @@ public actor DeletionExecutor {
         dryRun: Bool,
         excludedFolders: [String] = [],
         allowAppBundles: Bool = false
+    ) async throws -> DeletionExecutionReport {
+        let guardPolicy = safetyGuard
+        let driver = trashDriver
+
+        return try await Task.detached(priority: .userInitiated) {
+            try Self.performExecution(
+                items: items,
+                mode: mode,
+                dryRun: dryRun,
+                excludedFolders: excludedFolders,
+                allowAppBundles: allowAppBundles,
+                safetyGuard: guardPolicy,
+                trashDriver: driver
+            )
+        }.value
+    }
+
+    public func restore(entries: [TrashHistoryEntry]) async -> (restoredIDs: Set<UUID>, failures: [DeletionFailure]) {
+        let driver = trashDriver
+        return await Task.detached(priority: .userInitiated) {
+            Self.performRestore(entries: entries, trashDriver: driver)
+        }.value
+    }
+
+    private nonisolated static func performExecution(
+        items: [ScannedItem],
+        mode: DeletionMode,
+        dryRun: Bool,
+        excludedFolders: [String],
+        allowAppBundles: Bool,
+        safetyGuard: SafetyGuard,
+        trashDriver: any TrashDriver
     ) throws -> DeletionExecutionReport {
         let plan = try DeletionPlanner.plan(
             items: items,
@@ -90,6 +122,7 @@ public actor DeletionExecutor {
         var reclaimed: UInt64 = 0
 
         for entry in plan.entries {
+            if Task.isCancelled { break }
             let item = entry.item
             let resolved = FilesystemProbes.resolveRealPath(item.url)
 
@@ -142,12 +175,16 @@ public actor DeletionExecutor {
         )
     }
 
-    public func restore(entries: [TrashHistoryEntry]) -> (restoredIDs: Set<UUID>, failures: [DeletionFailure]) {
+    private nonisolated static func performRestore(
+        entries: [TrashHistoryEntry],
+        trashDriver: any TrashDriver
+    ) -> (restoredIDs: Set<UUID>, failures: [DeletionFailure]) {
         let fm = FileManager.default
         var restoredIDs = Set<UUID>()
         var failures: [DeletionFailure] = []
 
         for entry in entries {
+            if Task.isCancelled { break }
             let trashURL = URL(fileURLWithPath: entry.trashPath)
             let originalURL = URL(fileURLWithPath: entry.originalPath)
             let trashExists = fm.fileExists(atPath: trashURL.path)

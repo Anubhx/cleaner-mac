@@ -23,6 +23,7 @@ public enum DeadFileScanner {
         var results: [ScannedItem] = []
 
         for (subfolder, isAppSupport) in orphanSubfolders {
+            if Task.isCancelled { return results }
             let root = libraryRoot.appendingPathComponent(subfolder, isDirectory: true)
             guard let entries = try? fm.contentsOfDirectory(
                 at: root,
@@ -31,6 +32,7 @@ public enum DeadFileScanner {
             ) else { continue }
 
             for entry in entries {
+                if Task.isCancelled { return results }
                 let candidateName = entry.lastPathComponent
                 guard OrphanAppDetector.isOrphan(
                     entryName: candidateName,
@@ -104,6 +106,7 @@ public enum DeadFileScanner {
         var results: [ScannedItem] = []
 
         for entry in entries {
+            if Task.isCancelled { return results }
             let name = entry.lastPathComponent
             if name.lowercased().hasPrefix("com.apple.") { continue }
             guard let values = try? entry.resourceValues(forKeys: Set(keys)),
@@ -189,6 +192,7 @@ public enum DeadFileScanner {
 
         var results: [ScannedItem] = []
         for target in expandedTargets {
+            if Task.isCancelled { return results }
             guard fm.fileExists(atPath: target.url.path),
                   (try? safetyGuard.validatePath(target.url, excludedFolders: excludedFolders)) != nil,
                   FilesystemProbes.isCleanableByCurrentProcess(target.url) else {
@@ -242,6 +246,7 @@ public enum DeadFileScanner {
 
         var items: [ScannedItem] = []
         for entry in entries {
+            if Task.isCancelled { return items }
             guard let values = try? entry.resourceValues(forKeys: keys),
                   values.isRegularFile == true else { continue }
             let size = UInt64(max(0, values.fileSize ?? 0))
