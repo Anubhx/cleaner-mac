@@ -115,7 +115,7 @@ public struct ResultsListView: View {
         }
         .padding(.horizontal, CleanerSpacing.lg)
         .padding(.vertical, CleanerSpacing.xs)
-        .background(.ultraThinMaterial)
+        .cleanerMaterial(.ultraThinMaterial, fallback: Color(nsColor: .controlBackgroundColor))
     }
 
     @ViewBuilder

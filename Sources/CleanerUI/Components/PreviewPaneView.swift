@@ -50,7 +50,7 @@ public struct PreviewPaneView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.thinMaterial)
+        .cleanerMaterial(.thinMaterial, fallback: Color(nsColor: .controlBackgroundColor))
     }
 
     @ViewBuilder

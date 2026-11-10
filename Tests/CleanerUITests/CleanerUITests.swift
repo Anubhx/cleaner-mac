@@ -456,6 +456,79 @@ struct CleanerUITests {
         // Headless Settings scene view instantiates cleanly
         _ = ScanSettingsView(store: store, showsHeader: false).body
     }
+
+    @Test("Material surfaces switch away from translucent backdrop layers when Reduce Transparency is enabled")
+    @MainActor
+    func reduceTransparencyDisablesMaterialSurfaces() {
+        func countBackdropLayers(in layer: CALayer?) -> Int {
+            guard let layer else { return 0 }
+            let className = NSStringFromClass(type(of: layer))
+            let isBackdrop = className.contains("Backdrop")
+            return (isBackdrop ? 1 : 0) + (layer.sublayers ?? []).reduce(0) { $0 + countBackdropLayers(in: $1) }
+        }
+
+        func renderAndCountBackdrops<V: View>(_ view: V) -> Int {
+            let host = NSHostingView(rootView: view)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            window.contentView = host
+            host.wantsLayer = true
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            return countBackdropLayers(in: host.layer)
+        }
+
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(outcome: ScanOutcome()),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            previewService: PreviewService()
+        )
+        store.isDryRunEnabled = true
+        store.statusBannerMessage = "Test banner"
+
+        let sampleSurfaces = VStack {
+            DryRunRibbon()
+            BackgroundScanHUD(
+                progress: store.progress,
+                isScanning: false,
+                isPaused: false,
+                onPause: {},
+                onResume: {},
+                onCancel: {}
+            )
+        }
+
+        let standardCount = renderAndCountBackdrops(
+            sampleSurfaces.environment(\.cleanerReduceTransparencyOverride, false)
+        )
+        let reducedCount = renderAndCountBackdrops(
+            sampleSurfaces.environment(\.cleanerReduceTransparencyOverride, true)
+        )
+        #expect(standardCount >= 2)
+        #expect(reducedCount == 0)
+
+        // Exercise remaining material surfaces under Reduce Transparency
+        _ = renderAndCountBackdrops(
+            PreviewPaneView(
+                item: nil,
+                payload: nil,
+                isLoading: false,
+                isChecked: false,
+                onToggleCheck: {},
+                onTrashFocused: {},
+                onPermanentDeleteFocused: {}
+            )
+            .frame(width: 360, height: 320)
+            .environment(\.cleanerReduceTransparencyOverride, true)
+        )
+        _ = CleanerRootView(store: store).environment(\.cleanerReduceTransparencyOverride, true)
+        _ = ResultsListView(store: store, category: .duplicates).environment(\.cleanerReduceTransparencyOverride, true)
+    }
 }
 
 private actor FakeScanningService: ScanningServicing {

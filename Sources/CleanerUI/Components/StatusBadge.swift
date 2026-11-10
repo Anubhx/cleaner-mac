@@ -107,7 +107,7 @@ public struct DryRunRibbon: View {
         }
         .padding(.horizontal, CleanerSpacing.md)
         .padding(.vertical, CleanerSpacing.xs)
-        .background(.ultraThinMaterial)
+        .cleanerMaterial(.ultraThinMaterial, fallback: Color(nsColor: .controlBackgroundColor))
         .overlay(alignment: .bottom) {
             Rectangle().fill(CleanerColors.hairline).frame(height: 1)
         }
@@ -208,7 +208,7 @@ public struct BackgroundScanHUD: View {
             }
         }
         .padding(CleanerSpacing.sm)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
+        .cleanerMaterial(.regularMaterial, in: RoundedRectangle(cornerRadius: CleanerRadii.md), fallback: Color(nsColor: .controlBackgroundColor))
         .overlay(
             RoundedRectangle(cornerRadius: CleanerRadii.md)
                 .stroke(CleanerColors.hairline, lineWidth: 1)
