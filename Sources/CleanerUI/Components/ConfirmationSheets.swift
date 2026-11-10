@@ -62,7 +62,7 @@ public struct MoveToTrashConfirmationSheet: View {
         }
         .padding(CleanerSpacing.lg)
         .frame(width: 520)
-        .cleanerMaterial(.regularMaterial, fallback: Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -138,7 +138,7 @@ public struct PermanentDeleteConfirmationSheet: View {
         }
         .padding(CleanerSpacing.lg)
         .frame(width: 540)
-        .cleanerMaterial(.regularMaterial, fallback: Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -207,7 +207,7 @@ public struct ExecutionReportSheet: View {
         }
         .padding(CleanerSpacing.lg)
         .frame(width: 520)
-        .cleanerMaterial(.regularMaterial, fallback: Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func summaryMetric(label: String, value: String) -> some View {

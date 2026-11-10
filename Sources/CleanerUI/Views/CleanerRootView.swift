@@ -139,7 +139,7 @@ public struct CleanerRootView: View {
             }
             .padding(CleanerSpacing.sm)
         }
-        .cleanerMaterial(.ultraThinMaterial, fallback: Color(nsColor: .underPageBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func sidebarCategoryRow(_ category: ScanCategory) -> some View {
@@ -191,7 +191,7 @@ public struct CleanerRootView: View {
                 }
                 .padding(.horizontal, CleanerSpacing.md)
                 .padding(.vertical, CleanerSpacing.xs)
-                .cleanerMaterial(.regularMaterial, fallback: Color(nsColor: .controlBackgroundColor))
+                .background(Color(nsColor: .controlBackgroundColor))
                 Divider()
             }
 

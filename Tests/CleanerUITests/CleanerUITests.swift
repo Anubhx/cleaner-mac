@@ -457,77 +457,185 @@ struct CleanerUITests {
         _ = ScanSettingsView(store: store, showsHeader: false).body
     }
 
-    @Test("Material surfaces switch away from translucent backdrop layers when Reduce Transparency is enabled")
+    @Test("Opaque app chrome hosts zero app-owned translucent backdrop or visual-effect surfaces")
     @MainActor
     func reduceTransparencyDisablesMaterialSurfaces() {
-        func countBackdropLayers(in layer: CALayer?) -> Int {
-            guard let layer else { return 0 }
-            let className = NSStringFromClass(type(of: layer))
-            let isBackdrop = className.contains("Backdrop")
-            return (isBackdrop ? 1 : 0) + (layer.sublayers ?? []).reduce(0) { $0 + countBackdropLayers(in: $1) }
+        func owningView(for layer: CALayer) -> NSView? {
+            var current: CALayer? = layer
+            while let candidate = current {
+                if let view = candidate.delegate as? NSView {
+                    return view
+                }
+                current = candidate.superlayer
+            }
+            return nil
         }
 
-        func renderAndCountBackdrops<V: View>(_ view: V) -> Int {
+        func isSystemManagedChrome(_ view: NSView) -> Bool {
+            var current: NSView? = view
+            while let node = current {
+                let className = NSStringFromClass(type(of: node))
+                if className.contains("NSScrollPocket")
+                    || className.contains("NSGlassEffectView")
+                    || className.contains("NSContainerConcentricGlassEffectView")
+                    || className.contains("_NSCoreHostingView")
+                    || className.contains("_NSScrollViewContentBackgroundView")
+                {
+                    return true
+                }
+                if className.contains("NSHostingView") || className.contains("HostingScrollView") {
+                    return false
+                }
+                current = node.superview
+            }
+            return false
+        }
+
+        func collectAppOwnedBackdropLayers(in layer: CALayer?) -> [CALayer] {
+            guard let layer else { return [] }
+            var found: [CALayer] = []
+            let className = NSStringFromClass(type(of: layer))
+            if className.contains("Backdrop") {
+                if let owner = owningView(for: layer), !isSystemManagedChrome(owner) {
+                    found.append(layer)
+                } else if owningView(for: layer) == nil {
+                    found.append(layer)
+                }
+            }
+            for sublayer in layer.sublayers ?? [] {
+                found.append(contentsOf: collectAppOwnedBackdropLayers(in: sublayer))
+            }
+            return found
+        }
+
+        func collectAllVisualEffectViews(in view: NSView) -> [NSVisualEffectView] {
+            var found: [NSVisualEffectView] = []
+            if let vef = view as? NSVisualEffectView {
+                found.append(vef)
+            }
+            for subview in view.subviews {
+                found.append(contentsOf: collectAllVisualEffectViews(in: subview))
+            }
+            return found
+        }
+
+        func hostAndLayout<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
             let host = NSHostingView(rootView: view)
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
-                styleMask: [.titled],
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             window.contentView = host
             host.wantsLayer = true
             host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
-            return countBackdropLayers(in: host.layer)
+            return (window, host)
         }
 
+        // Sanity check: confirm detector catches an app-owned within-window Material if one existed
+        let probeHost = hostAndLayout(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.clear)
+                .background(.regularMaterial)
+                .frame(width: 240, height: 120),
+            size: NSSize(width: 240, height: 120)
+        )
+        #expect(!collectAppOwnedBackdropLayers(in: probeHost.1.layer).isEmpty)
+
+        // Populate a realistic CleanerRootView across sidebar, HUDs, dry-run ribbon, banner, results, and inspector
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+        let focusedItem = ScannedItem(
+            url: URL(fileURLWithPath: "/Users/alice/Downloads/archive.zip"),
+            name: "archive.zip",
+            logicalSize: 52_000_000,
+            allocatedSize: 52_000_000,
+            isDirectory: false,
+            modifiedDate: Date(),
+            category: .largeFiles,
+            risk: RiskAssessment(level: .low, reason: "Archive in Downloads"),
+            isRecommendedKeep: false
+        )
+        let outcome = ScanOutcome(
+            itemsByCategory: [.largeFiles: [focusedItem]],
+            progress: ScanProgress(phase: .completed, scannedFiles: 120, bytesEvaluated: 52_000_000)
+        )
         let store = CleanerWorkspaceStore(
-            scanner: FakeScanningService(outcome: ScanOutcome()),
+            scanner: FakeScanningService(outcome: outcome),
             deleter: FakeDeletionService(),
             historyStore: FakeHistoryService(),
             previewService: PreviewService()
         )
+        store.itemsByCategory = [.largeFiles: [focusedItem]]
+        store.selectedSidebarDestination = .category(.largeFiles)
+        store.volumeStorage = VolumeStorageSnapshot(
+            volumeName: "Macintosh HD",
+            totalBytes: 500_000_000_000,
+            availableBytes: 50_000_000_000
+        )
         store.isDryRunEnabled = true
         store.statusBannerMessage = "Test banner"
+        store.isInspectorVisible = true
+        store.clickRow(focusedItem, modifiers: [])
 
-        let sampleSurfaces = VStack {
-            DryRunRibbon()
-            BackgroundScanHUD(
-                progress: store.progress,
-                isScanning: false,
-                isPaused: false,
-                onPause: {},
-                onResume: {},
-                onCancel: {}
-            )
+        let (rootWindow, rootHost) = hostAndLayout(
+            CleanerRootView(store: store),
+            size: NSSize(width: 1240, height: 780)
+        )
+        #expect(rootWindow.isOpaque == true)
+        #expect(collectAppOwnedBackdropLayers(in: rootHost.layer).isEmpty)
+        for vef in collectAllVisualEffectViews(in: rootHost) {
+            #expect(vef.blendingMode == .withinWindow)
+            #expect(isSystemManagedChrome(vef))
         }
 
-        let standardCount = renderAndCountBackdrops(
-            sampleSurfaces.environment(\.cleanerReduceTransparencyOverride, false)
-        )
-        let reducedCount = renderAndCountBackdrops(
-            sampleSurfaces.environment(\.cleanerReduceTransparencyOverride, true)
-        )
-        #expect(standardCount >= 2)
-        #expect(reducedCount == 0)
+        // Exercise alternate destinations (History, Settings) and all confirmation/report sheets
+        store.selectedSidebarDestination = .history
+        let (_, historyHost) = hostAndLayout(HistoryView(store: store), size: NSSize(width: 720, height: 520))
+        #expect(collectAppOwnedBackdropLayers(in: historyHost.layer).isEmpty)
 
-        // Exercise remaining material surfaces under Reduce Transparency
-        _ = renderAndCountBackdrops(
-            PreviewPaneView(
-                item: nil,
-                payload: nil,
-                isLoading: false,
-                isChecked: false,
-                onToggleCheck: {},
-                onTrashFocused: {},
-                onPermanentDeleteFocused: {}
-            )
-            .frame(width: 360, height: 320)
-            .environment(\.cleanerReduceTransparencyOverride, true)
+        store.selectedSidebarDestination = .settings
+        let (_, settingsHost) = hostAndLayout(ScanSettingsView(store: store), size: NSSize(width: 720, height: 520))
+        #expect(collectAppOwnedBackdropLayers(in: settingsHost.layer).isEmpty)
+
+        let (_, trashSheetHost) = hostAndLayout(
+            MoveToTrashConfirmationSheet(
+                items: [focusedItem],
+                totalBytes: focusedItem.logicalSize,
+                isDryRun: false,
+                onConfirm: {},
+                onCancel: {}
+            ),
+            size: NSSize(width: 520, height: 420)
         )
-        _ = CleanerRootView(store: store).environment(\.cleanerReduceTransparencyOverride, true)
-        _ = ResultsListView(store: store, category: .duplicates).environment(\.cleanerReduceTransparencyOverride, true)
+        #expect(collectAppOwnedBackdropLayers(in: trashSheetHost.layer).isEmpty)
+
+        let (_, permanentSheetHost) = hostAndLayout(
+            PermanentDeleteConfirmationSheet(
+                items: [focusedItem],
+                totalBytes: focusedItem.logicalSize,
+                isDryRun: false,
+                onConfirm: {},
+                onCancel: {}
+            ),
+            size: NSSize(width: 540, height: 420)
+        )
+        #expect(collectAppOwnedBackdropLayers(in: permanentSheetHost.layer).isEmpty)
+
+        let report = DeletionExecutionReport(
+            isDryRun: false,
+            mode: .moveToTrash,
+            succeededItems: [focusedItem],
+            reclaimedBytes: focusedItem.logicalSize
+        )
+        let (_, reportSheetHost) = hostAndLayout(
+            ExecutionReportSheet(report: report, onDismiss: {}),
+            size: NSSize(width: 520, height: 320)
+        )
+        #expect(collectAppOwnedBackdropLayers(in: reportSheetHost.layer).isEmpty)
     }
 
     @Test("Inspector action deck fits within minimum 340pt column width without clipping Permanently Delete")
