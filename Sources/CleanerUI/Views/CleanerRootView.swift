@@ -209,10 +209,14 @@ public struct CleanerRootView: View {
     private var toolbarItems: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Toggle(isOn: $store.isDryRunEnabled) {
-                Label("Dry Run", systemImage: "eye")
+                HStack(spacing: CleanerSpacing.xxs + 2) {
+                    Image(systemName: "eye")
+                    Text("Dry Run")
+                }
             }
             .toggleStyle(.button)
-            .help("Simulate deletions without changing files on disk")
+            .help("Simulate deletions without changing files on disk (Cmd+Shift+D)")
+            .accessibilityLabel("Dry Run")
 
             if store.isScanning {
                 Button {

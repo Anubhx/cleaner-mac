@@ -131,14 +131,15 @@ CleanerMac follows a strict **`4 pt` base grid**:
   - Dead / Leftover Files: `tray.full` / `folder.badge.questionmark`
   - Restore History: `arrow.uturn.backward.circle`
 - **Action & Safety Symbols:**
-  - Start Scan: `magnifyingglass`
+  - Start Scan / Scan Again: `magnifyingglass` / `arrow.clockwise`
   - Pause / Resume: `pause.fill` / `play.fill`
   - Cancel: `xmark.circle`
-  - Dry Run: `eye` / `testtube.2`
+  - Dry Run: `eye`
+  - Volume Storage: `internaldrive`
   - Move to Trash: `trash`
-  - Permanent Delete: `flame` or `trash.slash` (styled in `status.danger`)
+  - Permanent Delete: `trash.slash` (styled in `status.danger`)
   - Protected Path / Shield: `lock.shield`
-  - Reveal in Finder: `finder` or `folder`
+  - Reveal in Finder: `folder`
 
 ---
 
@@ -190,9 +191,10 @@ All animated modifiers check `@Environment(\.accessibilityReduceMotion)` and dow
 - **Metadata & Safety Grid:**
   - Logical Size vs. Allocated Size (APFS), Created / Modified / Last Accessed dates, Hard-Link Count, POSIX permissions, UTI, and **Safety / Risk Card** explaining the exact rule or warning reason.
 
-### 8.4 Background Scan Status HUD
-- Docked pill (`radius.lg`, `.regularMaterial`) anchored in the bottom of the sidebar or top toolbar:
-  - Phase label (`"Scanning ~/Downloads…"` in `type.callout`), live file & byte counters (`type.monoMetric`), determinate/indeterminate bar, and inline **Pause / Resume** (`pause.fill` / `play.fill`) + **Cancel** (`xmark`) buttons.
+### 8.4 Sidebar Capacity & Background Scan Status HUDs
+- **Disk Capacity HUD (`DiskCapacityHUD`):** Compact `surface.card` well above the scan HUD displaying `internaldrive`, volume name, `% full`, linear usage bar (`status.caution` above `85%`), and `used` / `free` metrics in `type.monoPath`.
+- **Background Scan HUD (`BackgroundScanHUD`):** Docked panel (`radius.md`, `.regularMaterial`) anchored at the bottom of the sidebar:
+  - Phase label (`"Scanning in background…"`, `"Scan complete"`, `"Scan paused"` in `type.callout`), live file & byte counters (`type.monoMetric`), active path caption (`type.monoPath`), inline **Pause / Resume** (`pause.fill` / `play.fill`) + **Cancel** (`xmark.circle.fill`) controls while scanning, and a full-width **Scan Again** (`arrow.clockwise`) button once completed or cancelled.
 
 ### 8.5 Dry-Run Banner & Report Sheet
 - When **Dry-Run Mode** is toggled on in the toolbar (`status.info` pill with `eye` icon):

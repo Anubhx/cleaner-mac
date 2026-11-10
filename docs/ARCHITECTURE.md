@@ -74,36 +74,38 @@ User Roots ──▶ [Pending Directory Queue] ──▶ Pop Batch (utility QoS)
                                         Stream ScanBatch (every ~80ms / 64 items)
 ```
 
-- **Pause:** Sets coordinator state to `.paused` and stops popping from `pendingDirectories` after the active directory entry finishes, preserving `pendingDirectories`, `discoveredCandidates`, `scannedFileCount`, and `bytesEvaluated` inside `ScanCheckpoint`.
+- **Pause:** Sets coordinator state to `.paused` and stops popping from the $O(1)$ frontier queue after the active directory entry finishes, preserving remaining `pendingDirectories`, `candidateFiles`, `deadItems`, `scannedFiles`, and `bytesEvaluated` inside `ScanCheckpoint`.
 - **Resume:** Re-enters the loop from the exact remaining `pendingDirectories` in `ScanCheckpoint` without rescanning already-visited folders.
-- **Cancel:** Cancels the active `TaskGroup` / `Task`, drains gracefully, and discards or freezes partial results cleanly.
-- **Throttled Streaming:** Discoveries buffer briefly and emit via `AsyncStream<ScanEvent>` every `~80 ms` or `64` items so SwiftUI list updates remain smooth on ProMotion (`120 Hz`) displays without main-actor congestion.
+- **Cancel:** Cancels the active `TaskGroup` / `Task`, drains gracefully, and freezes partial results cleanly.
+- **Throttled Streaming:** Discoveries buffer briefly and emit via `AsyncStream<ScanBatch>` every `~80 ms` or `64` items so SwiftUI list updates remain smooth on ProMotion (`120 Hz`) displays without main-actor congestion.
+- **Volume Capacity HUD:** `FilesystemProbes.volumeStorageSnapshot(for:)` queries real APFS volume capacity (`used`, `free`, percentage full) for the sidebar `DiskCapacityHUD`.
 
 ---
 
 ## 4. Category Pipelines
 
 ### 4.1 Duplicate Files (Content-Hash Pipeline)
-1. **Stage 1 — Size Grouping (`CleanerCore`):** Group regular files by logical size (`>= userMinDuplicateSize`, default `1 MiB` or `4 KiB` configurable), discarding unique sizes immediately.
+1. **Stage 1 — Size Grouping (`CleanerCore`):** Group regular files (outside `~/Library` unless explicitly rooted) by logical size (`>= userMinDuplicateSize`, default `1 MiB`), discarding unique sizes immediately.
 2. **Stage 2 — Partial Pre-Hash (`CleanerSystem`):** In parallel (`TaskGroup` bounded to active core count), hash the first `4 KiB` + last `4 KiB` (for files `> 8 KiB`) using `CryptoKit.SHA256`. Unique `(size, partialDigest)` pairs are discarded without reading full files.
 3. **Stage 3 — Full Streaming SHA-256 (`CleanerSystem`):** Hash remaining candidates in `64 KiB` streaming chunks, checking `Task.isCancelled` and pause gates between chunks.
-4. **Stage 4 — Hard-Link Deduplication (`CleanerCore`):** Group matching digests and deduplicate entries sharing `(st_dev, st_ino)` via `HardLinkTracker` so hard-linked files are never mistaken for separate duplicate copies or over-counted in reclaimable space.
+4. **Stage 4 — Hard-Link Deduplication (`CleanerCore`):** Lazily resolve `(st_dev, st_ino)` for verified duplicate candidates and deduplicate via `HardLinkTracker` so hard-linked files are never mistaken for separate duplicate copies or over-counted in reclaimable space.
 5. **Original Selection Heuristic:** Mark one recommended "Keep" original per group (prioritizing oldest creation date, shortest/most canonical path outside `Downloads`/`Trash`), while leaving **zero** duplicates auto-selected until reviewed or explicitly toggled.
 
 ### 4.2 Large Files
-- Scans user-selected scopes (defaulting to Home minus protected system/Library subtrees unless explicitly included) for files exceeding `ScanConfiguration.largeFileThresholdBytes` (user-configurable, e.g., `100 MB` default).
-- Displays both logical size and APFS allocated size (`fileAllocatedSizeKey`) so sparse files and APFS clones are accurately represented.
+- Descends across user-selected roots—explicitly entering macOS `UF_HIDDEN` `~/Library` while skipping sensitive internals (`Preferences`, `Keychains`, `Cookies`, `Mail`, `Messages`, `Safari`, `Group Containers`, nested `Containers/*/Data/Library/<blocked>`)—so oversized user media, VMs, and assets inside `Containers` / `Application Support` / `Developer` surface exceeding `ScanConfiguration.largeFileThresholdBytes` (`100 MB` default).
+- Computes `reclaimableDiskBytes` using APFS allocated blocks for sparse virtual disks (such as `Docker.raw`) and `0` for iCloud dataless stubs, while still showing both logical and allocated sizes in the Preview Inspector.
 
 ### 4.3 Old Files
-- Evaluates files older than `ScanConfiguration.oldFileThresholdDays` (user-configurable, e.g., `180 days` default) using `AgeBasis`:
+- Evaluates user files outside `~/Library` (unless explicitly targeted) older than `ScanConfiguration.oldFileThresholdDays` (`180 days` default) using `AgeBasis`:
   - `.lastAccessedOrModified` (uses `contentAccessDateKey` when strictly later/valid, falling back to `contentModificationDateKey` on APFS volumes mounted with `noatime`/`relatime`).
   - `.lastModifiedOnly` (strictly `contentModificationDateKey`).
 
 ### 4.4 Dead & Leftover Files
 1. **Orphaned App Data:** Enumerates installed `CFBundleIdentifier` values across `/Applications`, `/Applications/Utilities`, `/System/Applications`, `/System/Applications/Utilities`, and `~/Applications` (including nested vendor folders). Safety fail-safe: if zero installed apps are found, orphan detection aborts without flagging anything. Checks `~/Library/Caches`, `~/Library/Logs`, `~/Library/HTTPStorages`, `~/Library/Saved Application State`, `~/Library/WebKit`, and (flagged as `.moderate` risk with explicit explanation) `~/Library/Application Support` for reverse-DNS entries (`>= 3` components) not sharing lineage with any installed app or helper suffix (`.helper`, `.agent`, `.daemon`, `.updater`, `.xpc`, etc.), and never matching `com.apple.*` or shared runtimes (`org.chromium.*`, `com.electron.*`, `com.google.keystone`, etc.).
-2. **Stale App/Developer Caches:** Scoped user caches (`~/Library/Caches`, optional developer caches when selected) with age/writability validation.
-3. **Broken / Incomplete Downloads:** `*.download`, `*.crdownload`, `*.part`, `*.partial`, and zero-byte leftovers in `~/Downloads` older than a 24-hour active-transfer grace period.
-4. **Empty Directories:** Bottom-up emptiness checks skipping package bundles (`.app`, `.bundle`, `.framework`, `.xcodeproj`, `.xcworkspace`, `.git`), `.Trash`, and protected prefixes.
+2. **Stale & Heavy Active Third-Party Caches:** Scans `~/Library/Caches` (`com.apple.*` spared) for caches untouched `>= 30 days` (`Low Risk`) as well as heavy active caches `>= 50 MB` (`Review Carefully`).
+3. **Developer & Package Caches:** Targets rebuildable build/package stores (`.npm/_cacache`, `.npm/_npx`, `.gradle/caches`, `.pnpm-store`, `.bun/install/cache`, `.cache/*`, `Xcode DerivedData`, `iOS DeviceSupport`, `CoreSimulator/Caches`).
+4. **Broken / Incomplete Downloads:** `*.download`, `*.crdownload`, `*.part`, `*.partial`, `*.opdownload` in `~/Downloads` untouched past a 24-hour active-transfer grace period.
+5. **Empty Directories:** Bottom-up emptiness checks outside `~/Library` internals, skipping package bundles (`.app`, `.bundle`, `.framework`, `.xcodeproj`, `.xcworkspace`, `.git`), `.Trash`, and protected prefixes.
 
 ---
 
