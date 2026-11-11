@@ -9,20 +9,7 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 ENTITLEMENTS_FILE="$ROOT_DIR/Resources/CleanerMac.entitlements"
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
-REQUIRE_DEVELOPER_ID="${REQUIRE_DEVELOPER_ID:-0}"
-
-if [[ -z "$CODESIGN_IDENTITY" || "$CODESIGN_IDENTITY" == "-" ]]; then
-  if [[ "$REQUIRE_DEVELOPER_ID" == "1" ]]; then
-    echo "Error: REQUIRE_DEVELOPER_ID=1 requires CODESIGN_IDENTITY (e.g. 'Developer ID Application: Name (TEAMID)')." >&2
-    exit 1
-  fi
-  SIGN_IDENTITY="-"
-  IS_ADHOC=1
-else
-  SIGN_IDENTITY="$CODESIGN_IDENTITY"
-  IS_ADHOC=0
-fi
+SIGN_IDENTITY="-"
 
 if ! command -v codesign >/dev/null 2>&1; then
   echo "Error: codesign tool not found." >&2
@@ -69,10 +56,8 @@ plutil -lint "$CONTENTS_DIR/Info.plist" >/dev/null
 cp "$ROOT_DIR"/Sources/CleanerUI/Resources/Fonts/*.ttf "$RESOURCES_DIR/Fonts/"
 cp "$ROOT_DIR"/Sources/CleanerUI/Resources/Fonts/OFL.txt "$RESOURCES_DIR/Fonts/"
 
+# Permanent distribution signing method: ad-hoc Hardened Runtime (`codesign --sign -`).
 SIGN_COMMON_ARGS=(--force --sign "$SIGN_IDENTITY")
-if [[ "$IS_ADHOC" -eq 0 ]]; then
-  SIGN_COMMON_ARGS+=(--timestamp)
-fi
 
 # Inside-out signing: sign any nested Mach-O binaries or embedded bundles deepest-first,
 # never using --deep, then sign the outer .app bundle last with Hardened Runtime + entitlements.
@@ -107,20 +92,10 @@ codesign "${SIGN_COMMON_ARGS[@]}" \
 
 codesign --verify --deep --strict --verbose=4 "$APP_BUNDLE" >/dev/null
 
-if [[ "$REQUIRE_DEVELOPER_ID" == "1" ]]; then
-  SIGN_DETAILS="$(codesign -dvvv "$APP_BUNDLE" 2>&1)"
-  if ! grep -q "Authority=Developer ID Application:" <<<"$SIGN_DETAILS"; then
-    echo "Error: App is not signed with a Developer ID Application certificate." >&2
-    exit 1
-  fi
-  if ! grep -Eq "flags=.*\(.*runtime.*\)" <<<"$SIGN_DETAILS"; then
-    echo "Error: Hardened Runtime flag missing on signed bundle." >&2
-    exit 1
-  fi
-  if grep -q "TeamIdentifier=not set" <<<"$SIGN_DETAILS"; then
-    echo "Error: TeamIdentifier is missing on signed bundle." >&2
-    exit 1
-  fi
+SIGN_DETAILS="$(codesign -dvvv "$APP_BUNDLE" 2>&1)"
+if ! grep -Eq "flags=.*\(.*runtime.*\)" <<<"$SIGN_DETAILS"; then
+  echo "Error: Hardened Runtime flag missing on signed bundle." >&2
+  exit 1
 fi
 
 echo "Created app bundle at: $APP_BUNDLE"

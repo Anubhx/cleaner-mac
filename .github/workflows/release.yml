@@ -67,18 +67,18 @@ jobs:
           cat <<'EOF' > "$NOTES_FILE"
           ### Install & First Launch (Apple Silicon / macOS 14+)
 
-          Prebuilt GitHub Releases use ad-hoc Hardened Runtime signing (not Apple Developer ID notarized).
+          Prebuilt GitHub Releases use local ad-hoc Hardened Runtime signing (`codesign --sign -`). This open-source project does not use a paid Apple Developer ID certificate, so downloads are not notarized by Apple.
 
           1. **(Recommended) Verify checksum:**
              ```bash
              shasum -a 256 -c SHA256SUMS.txt
              ```
           2. Unzip `CleanerMac-macOS-arm64.zip` and move `CleanerMac.app` to `/Applications`.
-          3. **Approve once on first launch:**
-             - **System Settings (GUI):** Double-click `/Applications/CleanerMac.app`, click **Done** on the verification prompt, open **System Settings -> Privacy & Security -> Security**, click **Open Anyway**, and confirm.
+          3. **Open anyway on first launch (only needed once):**
+             - Right-click (or Control-click) `/Applications/CleanerMac.app` and choose **Open**, then click **Open** in the dialog. *(On macOS 15+, if no **Open** button appears, click **Done**, open **System Settings -> Privacy & Security -> Security**, and click **Open Anyway**.)*
              - **Terminal alternative:**
                ```bash
-               xattr -dr com.apple.quarantine /Applications/CleanerMac.app
+               xattr -cr /Applications/CleanerMac.app
                open /Applications/CleanerMac.app
                ```
           4. **Full Disk Access:** When granting Full Disk Access in **System Settings -> Privacy & Security -> Full Disk Access**, pick **Quit & Reopen** if prompted. After upgrading versions, toggle CleanerMac off and back on once if protected folders remain limited.

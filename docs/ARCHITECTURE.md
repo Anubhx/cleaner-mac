@@ -187,7 +187,6 @@ cleaner-mac/
 │   ├── SAFETY_RULES.md
 │   └── TEST_PLAN.md
 ├── scripts/
-│   ├── notarize-app.sh
 │   ├── package-app.sh
 │   └── run-tests.sh
 ├── Package.swift

@@ -15,6 +15,60 @@
 
 ---
 
+## Installing CleanerMac
+
+Download `CleanerMac-macOS-arm64.zip` from [GitHub Releases](https://github.com/Anubhx/cleaner-mac/releases), unzip it, and drag `CleanerMac.app` into `/Applications`.
+
+1. **First-launch Gatekeeper warning:** macOS shows a Gatekeeper warning on first launch because CleanerMac uses local ad-hoc signing (`codesign --sign -`) and is not notarized — as a free, open-source project, it does not use a paid Apple Developer ID certificate.
+2. **Open it anyway (one-time step):** Right-click (or Control-click) `CleanerMac.app` and choose **Open**, then click **Open** again in the dialog — this only needs to be done once. *(On macOS 15 Sequoia or newer, if no **Open** button appears in that dialog, click **Done**, open **System Settings -> Privacy & Security -> Security**, and click **Open Anyway**.)*
+3. **Alternative if that doesn't work:** Run `xattr -cr /path/to/CleanerMac.app` in Terminal to strip the quarantine flag (for example, `xattr -cr /Applications/CleanerMac.app`).
+
+<details>
+<summary>Verify SHA-256 checksum, build from source, and Full Disk Access setup</summary>
+
+### Verify Release Checksum
+
+If `SHA256SUMS.txt` is attached to the release, verify the archive before opening:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+### Build & Install from Source (Zero Gatekeeper Warnings)
+
+Building locally works with standalone Apple Command Line Tools (`xcode-select --install`, no full Xcode installation required) and produces an unquarantined `.app` bundle that opens immediately without Gatekeeper warnings:
+
+```bash
+git clone https://github.com/Anubhx/cleaner-mac.git
+cd cleaner-mac
+./scripts/run-tests.sh
+./scripts/package-app.sh
+cp -R dist/CleanerMac.app /Applications/
+open /Applications/CleanerMac.app
+```
+
+> `./scripts/run-tests.sh` works cleanly on both full Xcode installations and standalone Apple Command Line Tools (`/Library/Developer/CommandLineTools`).
+
+Alternatively, run directly without packaging:
+
+```bash
+swift run CleanerApp
+```
+
+### Full Disk Access & Updates Note
+
+- To inspect protected user containers (`~/Library/Containers`, Mail/Safari caches), grant Terminal (when running via `swift run`) or `CleanerMac.app` **Full Disk Access** in **System Settings -> Privacy & Security -> Full Disk Access**. If macOS prompts **Quit & Reopen** vs **Later**, choose **Quit & Reopen** so the OS applies the permission to the running process immediately.
+- Even with Full Disk Access granted, [`SafetyGuard`](Sources/CleanerCore/Safety/SafetyGuard.swift) strictly blocks OS system volumes (`/System`, `/Library`, `/usr`, `/bin`, `/sbin`) and other user home directories.
+- Because ad-hoc builds anchor macOS TCC permissions to the binary's `cdhash`, permissions persist across restarts of the same version, but you may need to toggle CleanerMac off/on in **Full Disk Access** once after upgrading to a newer build.
+
+![CleanerMac onboarding Permissions step showing live Full Disk Access status and System Settings shortcut](docs/images/welcome-permissions.png)
+
+*First-launch Permissions setup with direct System Settings link, live status check, and limited-mode fallback.*
+
+</details>
+
+---
+
 ## Core Capabilities
 
 - **Four Focused Scan Categories**
@@ -64,61 +118,6 @@ Detailed documents:
 - [Safety & Protected-Path Rules](docs/SAFETY_RULES.md)
 - [Test Plan & TDD Matrix](docs/TEST_PLAN.md)
 - [Security Policy](SECURITY.md)
-
----
-
-## Getting Started
-
-### Option 1 — Build & Install from Source (Zero Gatekeeper Warnings)
-
-Building locally works with standalone Apple Command Line Tools (`xcode-select --install`, no full Xcode installation required) and produces an unquarantined `.app` bundle that opens immediately without Gatekeeper warnings:
-
-```bash
-git clone https://github.com/Anubhx/cleaner-mac.git
-cd cleaner-mac
-./scripts/run-tests.sh
-./scripts/package-app.sh
-cp -R dist/CleanerMac.app /Applications/
-open /Applications/CleanerMac.app
-```
-
-> `./scripts/run-tests.sh` works cleanly on both full Xcode installations and standalone Apple Command Line Tools (`/Library/Developer/CommandLineTools`).
-
-Alternatively, run directly without packaging:
-
-```bash
-swift run CleanerApp
-```
-
-### Option 2 — Install Prebuilt GitHub Releases (Ad-Hoc Signed)
-
-Prebuilt builds on [GitHub Releases](https://github.com/Anubhx/cleaner-mac/releases) use local **ad-hoc Hardened Runtime signing** (`Resources/CleanerMac.entitlements`, non-sandboxed) rather than a paid Apple Developer ID notarization certificate. Because browsers tag downloaded archives with `com.apple.quarantine`, macOS Gatekeeper blocks initial launch until approved:
-
-1. **(Recommended) Verify download checksum** if `SHA256SUMS.txt` is attached to the release:
-   ```bash
-   shasum -a 256 -c SHA256SUMS.txt
-   ```
-2. Unzip and drag `CleanerMac.app` into `/Applications`.
-3. **Approve the app once (choose one):**
-   - **System Settings (GUI, macOS 15+):** Double-click `/Applications/CleanerMac.app` -> click **Done** (or **OK**) on the verification warning -> open **System Settings -> Privacy & Security -> Security** -> click **Open Anyway** -> authenticate and click **Open**.
-   - **Terminal (single-app quarantine removal):**
-     ```bash
-     xattr -dr com.apple.quarantine /Applications/CleanerMac.app
-     open /Applications/CleanerMac.app
-     ```
-     *(Only clears the download quarantine attribute on `CleanerMac.app`; macOS Gatekeeper remains enabled system-wide.)*
-
-> For maintainers or forks with an Apple Developer ID certificate, [`scripts/package-app.sh`](scripts/package-app.sh) (`CODESIGN_IDENTITY=... REQUIRE_DEVELOPER_ID=1`) and [`scripts/notarize-app.sh`](scripts/notarize-app.sh) support Developer ID inside-out signing, `notarytool` submission, stapling, and optional `.dmg` creation.
-
-### Full Disk Access & Updates Note
-
-- To inspect protected user containers (`~/Library/Containers`, Mail/Safari caches), grant Terminal (when running via `swift run`) or `CleanerMac.app` **Full Disk Access** in **System Settings -> Privacy & Security -> Full Disk Access**. If macOS prompts **Quit & Reopen** vs **Later**, choose **Quit & Reopen** so the OS applies the permission to the running process immediately.
-- Even with Full Disk Access granted, [`SafetyGuard`](Sources/CleanerCore/Safety/SafetyGuard.swift) strictly blocks OS system volumes (`/System`, `/Library`, `/usr`, `/bin`, `/sbin`) and other user home directories.
-- Because ad-hoc builds anchor macOS TCC permissions to the binary's `cdhash`, permissions persist across restarts of the same version, but you may need to toggle CleanerMac off/on in **Full Disk Access** once after upgrading to a newer build.
-
-![CleanerMac onboarding Permissions step showing live Full Disk Access status and System Settings shortcut](docs/images/welcome-permissions.png)
-
-*First-launch Permissions setup with direct System Settings link, live status check, and limited-mode fallback.*
 
 ---
 
