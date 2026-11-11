@@ -461,6 +461,18 @@ struct CleanerUITests {
     @Test("Opaque app chrome hosts zero app-owned translucent backdrop or visual-effect surfaces")
     @MainActor
     func reduceTransparencyDisablesMaterialSurfaces() {
+        struct ProbeVisualEffectView: NSViewRepresentable {
+            func makeNSView(context: Context) -> NSVisualEffectView {
+                let view = NSVisualEffectView()
+                view.blendingMode = .withinWindow
+                view.material = .hudWindow
+                view.state = .active
+                return view
+            }
+
+            func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+        }
+
         func owningView(for layer: CALayer) -> NSView? {
             var current: CALayer? = layer
             while let candidate = current {
@@ -476,6 +488,7 @@ struct CleanerUITests {
             var current: NSView? = view
             while let node = current {
                 let className = NSStringFromClass(type(of: node))
+                // 1. System scroll pockets, Liquid Glass chrome, and control internals are always AppKit-owned.
                 if className.contains("NSScrollPocket")
                     || className.contains("NSGlassEffectView")
                     || className.contains("NSContainerConcentricGlassEffectView")
@@ -484,8 +497,27 @@ struct CleanerUITests {
                 {
                     return true
                 }
-                if className.contains("NSHostingView") || className.contains("HostingScrollView") {
+                // 2. App content boundaries (hosting views, cell hosts, SwiftUI scroll views, custom representables)
+                //    stop system chrome inheritance so any material/VEV inside app content is flagged.
+                if className.contains("NSHostingView")
+                    || className.contains("CellHostingView")
+                    || className.contains("HostingScrollView")
+                {
                     return false
+                }
+                if className.contains("AppKitPlatformViewHost") {
+                    return className.contains("NavigationSplitRepresentable")
+                        || className.contains("OutlineListRepresentable")
+                }
+                // 3. macOS 14/15 AppKit split-view, titlebar, and sidebar outline chrome.
+                if className.contains("NSTitlebar")
+                    || className.contains("NSSplitView")
+                    || className.contains("ListCore")
+                    || className.contains("OutlineList")
+                    || node is NSSplitView
+                    || node is NSTableView
+                {
+                    return true
                 }
                 current = node.superview
             }
@@ -496,7 +528,7 @@ struct CleanerUITests {
             guard let layer else { return [] }
             var found: [CALayer] = []
             let className = NSStringFromClass(type(of: layer))
-            if className.contains("Backdrop") {
+            if className.contains("Backdrop") || className.contains("Chameleon") {
                 if let owner = owningView(for: layer), !isSystemManagedChrome(owner) {
                     found.append(layer)
                 } else if owningView(for: layer) == nil {
@@ -520,6 +552,10 @@ struct CleanerUITests {
             return found
         }
 
+        func collectAppOwnedVisualEffectViews(in view: NSView) -> [NSVisualEffectView] {
+            collectAllVisualEffectViews(in: view).filter { !isSystemManagedChrome($0) }
+        }
+
         func hostAndLayout<V: View>(_ view: V, size: NSSize) -> (NSWindow, NSView) {
             let host = NSHostingView(rootView: view)
             let window = NSWindow(
@@ -537,15 +573,24 @@ struct CleanerUITests {
             return (window, host)
         }
 
-        // Sanity check: confirm detector catches an app-owned within-window Material if one existed
-        let probeHost = hostAndLayout(
+        // Sanity checks: confirm detector catches both an app-owned NSVisualEffectView (macOS 14+)
+        // and SwiftUI within-window Material backdrop layers (macOS 26+ Liquid Glass layer pipeline).
+        let vefProbeHost = hostAndLayout(
+            ProbeVisualEffectView().frame(width: 240, height: 120),
+            size: NSSize(width: 240, height: 120)
+        )
+        #expect(!collectAppOwnedVisualEffectViews(in: vefProbeHost.1).isEmpty)
+
+        let materialProbeHost = hostAndLayout(
             RoundedRectangle(cornerRadius: 8)
                 .fill(.clear)
                 .background(.regularMaterial)
                 .frame(width: 240, height: 120),
             size: NSSize(width: 240, height: 120)
         )
-        #expect(!collectAppOwnedBackdropLayers(in: probeHost.1.layer).isEmpty)
+        if #available(macOS 26, *) {
+            #expect(!collectAppOwnedBackdropLayers(in: materialProbeHost.1.layer).isEmpty)
+        }
 
         // Populate a realistic CleanerRootView across sidebar, HUDs, dry-run ribbon, banner, results, and inspector
         InstrumentSerifFontRegistrar.registerBundledFonts()
@@ -588,19 +633,62 @@ struct CleanerUITests {
         )
         #expect(rootWindow.isOpaque == true)
         #expect(collectAppOwnedBackdropLayers(in: rootHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: rootHost).isEmpty)
         for vef in collectAllVisualEffectViews(in: rootHost) {
-            #expect(vef.blendingMode == .withinWindow)
+            if #available(macOS 26, *) {
+                #expect(vef.blendingMode == .withinWindow)
+            }
             #expect(isSystemManagedChrome(vef))
         }
 
-        // Exercise alternate destinations (History, Settings) and all confirmation/report sheets
+        // Exercise standalone views, alternate destinations, Welcome onboarding, and all confirmation/report sheets
+        let (_, resultsHost) = hostAndLayout(
+            ResultsListView(store: store, category: .largeFiles),
+            size: NSSize(width: 720, height: 520)
+        )
+        #expect(collectAppOwnedBackdropLayers(in: resultsHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: resultsHost).isEmpty)
+
+        let (_, previewHost) = hostAndLayout(
+            PreviewPaneView(
+                item: focusedItem,
+                payload: nil,
+                isLoading: false,
+                isChecked: true,
+                onToggleCheck: {},
+                onTrashFocused: {},
+                onPermanentDeleteFocused: {}
+            ),
+            size: NSSize(width: 360, height: 640)
+        )
+        #expect(collectAppOwnedBackdropLayers(in: previewHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: previewHost).isEmpty)
+
         store.selectedSidebarDestination = .history
         let (_, historyHost) = hostAndLayout(HistoryView(store: store), size: NSSize(width: 720, height: 520))
         #expect(collectAppOwnedBackdropLayers(in: historyHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: historyHost).isEmpty)
 
         store.selectedSidebarDestination = .settings
         let (_, settingsHost) = hostAndLayout(ScanSettingsView(store: store), size: NSSize(width: 720, height: 520))
         #expect(collectAppOwnedBackdropLayers(in: settingsHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: settingsHost).isEmpty)
+
+        let welcomeSuite = "CleanerUITests.OpaqueWelcome.\(UUID().uuidString)"
+        let welcomeDefaults = UserDefaults(suiteName: welcomeSuite)!
+        defer { welcomeDefaults.removePersistentDomain(forName: welcomeSuite) }
+        let welcomeModel = WelcomeOnboardingModel(
+            isFirstLaunch: true,
+            userDefaults: welcomeDefaults,
+            permissionChecker: MutablePermissionChecker(initialStatus: .notGranted),
+            notificationCenter: NotificationCenter()
+        )
+        let (_, welcomeHost) = hostAndLayout(
+            WelcomeOnboardingView(model: welcomeModel, reduceMotionOverride: true),
+            size: WelcomeOnboardingPolicy.windowSize
+        )
+        #expect(collectAppOwnedBackdropLayers(in: welcomeHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: welcomeHost).isEmpty)
 
         let (_, trashSheetHost) = hostAndLayout(
             MoveToTrashConfirmationSheet(
@@ -613,6 +701,7 @@ struct CleanerUITests {
             size: NSSize(width: 520, height: 420)
         )
         #expect(collectAppOwnedBackdropLayers(in: trashSheetHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: trashSheetHost).isEmpty)
 
         let (_, permanentSheetHost) = hostAndLayout(
             PermanentDeleteConfirmationSheet(
@@ -625,6 +714,7 @@ struct CleanerUITests {
             size: NSSize(width: 540, height: 420)
         )
         #expect(collectAppOwnedBackdropLayers(in: permanentSheetHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: permanentSheetHost).isEmpty)
 
         let report = DeletionExecutionReport(
             isDryRun: false,
@@ -637,6 +727,7 @@ struct CleanerUITests {
             size: NSSize(width: 520, height: 320)
         )
         #expect(collectAppOwnedBackdropLayers(in: reportSheetHost.layer).isEmpty)
+        #expect(collectAppOwnedVisualEffectViews(in: reportSheetHost).isEmpty)
     }
 
     @Test("Inspector action deck fits within minimum 340pt column width without clipping Permanently Delete")
