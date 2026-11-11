@@ -136,7 +136,8 @@ cleaner-mac/
 │   │   ├── feature_request.yml
 │   │   └── config.yml
 │   ├── workflows/
-│   │   └── ci.yml
+│   │   ├── ci.yml
+│   │   └── release.yml
 │   └── pull_request_template.md
 ├── Resources/
 │   ├── CleanerMac.entitlements
@@ -177,6 +178,10 @@ cleaner-mac/
 │   ├── CleanerPreviewTests/
 │   └── CleanerUITests/
 ├── docs/
+│   ├── images/
+│   │   ├── cleanermac-walkthrough.gif
+│   │   ├── welcome-permissions.png
+│   │   └── workspace-preview.png
 │   ├── ARCHITECTURE.md
 │   ├── DESIGN_SYSTEM.md
 │   ├── SAFETY_RULES.md

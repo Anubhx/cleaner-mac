@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish macOS Release (arm64)
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Swift version
+        run: swift --version
+
+      - name: Verify zero network or telemetry references
+        run: |
+          if grep -rnE "URLSession|import Network|NWConnection|URLRequest" Sources/; then
+            echo "Error: Networking primitives are forbidden in CleanerMac Sources/"
+            exit 1
+          fi
+
+      - name: Run unit and integration test suites
+        run: ./scripts/run-tests.sh
+
+      - name: Build and package CleanerMac.app (arm64)
+        run: ./scripts/package-app.sh
+
+      - name: Create release archive and SHA-256 checksums
+        run: |
+          codesign --verify --deep --strict --verbose=4 dist/CleanerMac.app
+
+          RELEASE_DIR="${RUNNER_TEMP:-dist}/cleanermac-release"
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+
+          ditto -c -k --keepParent dist/CleanerMac.app "$RELEASE_DIR/CleanerMac-macOS-arm64.zip"
+
+          (
+            cd "$RELEASE_DIR"
+            shasum -a 256 CleanerMac-macOS-arm64.zip > SHA256SUMS.txt
+            shasum -a 256 -c SHA256SUMS.txt
+          )
+
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          ditto -x -k "$RELEASE_DIR/CleanerMac-macOS-arm64.zip" "$VERIFY_DIR"
+          codesign --verify --deep --strict --verbose=4 "$VERIFY_DIR/CleanerMac.app"
+          test -x "$VERIFY_DIR/CleanerMac.app/Contents/MacOS/CleanerApp"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          RELEASE_DIR="${RUNNER_TEMP:-dist}/cleanermac-release"
+          ZIP_PATH="$RELEASE_DIR/CleanerMac-macOS-arm64.zip"
+          SUMS_PATH="$RELEASE_DIR/SHA256SUMS.txt"
+
+          NOTES_FILE="$RELEASE_DIR/release-notes.md"
+          cat <<'EOF' > "$NOTES_FILE"
+          ### Install & First Launch (Apple Silicon / macOS 14+)
+
+          Prebuilt GitHub Releases use ad-hoc Hardened Runtime signing (not Apple Developer ID notarized).
+
+          1. **(Recommended) Verify checksum:**
+             ```bash
+             shasum -a 256 -c SHA256SUMS.txt
+             ```
+          2. Unzip `CleanerMac-macOS-arm64.zip` and move `CleanerMac.app` to `/Applications`.
+          3. **Approve once on first launch:**
+             - **System Settings (GUI):** Double-click `/Applications/CleanerMac.app`, click **Done** on the verification prompt, open **System Settings -> Privacy & Security -> Security**, click **Open Anyway**, and confirm.
+             - **Terminal alternative:**
+               ```bash
+               xattr -dr com.apple.quarantine /Applications/CleanerMac.app
+               open /Applications/CleanerMac.app
+               ```
+          4. **Full Disk Access:** When granting Full Disk Access in **System Settings -> Privacy & Security -> Full Disk Access**, pick **Quit & Reopen** if prompted. After upgrading versions, toggle CleanerMac off and back on once if protected folders remain limited.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP_PATH" "$SUMS_PATH" --clobber
+          else
+            EXTRA_FLAGS=(--verify-tag --generate-notes --title "CleanerMac $TAG" --notes "$(cat "$NOTES_FILE")")
+            if [[ "$TAG" == *-* ]]; then
+              EXTRA_FLAGS+=(--prerelease)
+            fi
+            gh release create "$TAG" "$ZIP_PATH" "$SUMS_PATH" "${EXTRA_FLAGS[@]}"
+          fi
