@@ -44,6 +44,7 @@ public struct ScanSettingsView: View {
                 )
 
                 thresholdsCard
+                categoriesCard
                 safetyPolicyCard
             }
             .padding(CleanerSpacing.lg)
@@ -255,6 +256,62 @@ public struct ScanSettingsView: View {
         )
     }
 
+    private var categoriesCard: some View {
+        VStack(alignment: .leading, spacing: CleanerSpacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Scan Categories")
+                    .font(CleanerTypography.headline)
+                Text("Choose which categories to include when scanning. At least one category must remain enabled.")
+                    .font(CleanerTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ForEach(ScanCategory.allCases) { category in
+                let isEnabled = store.configuration.categories.contains(category)
+                let isLastEnabled = isEnabled && store.configuration.categories.count <= 1
+
+                HStack(alignment: .center, spacing: CleanerSpacing.sm) {
+                    Image(systemName: category.symbolName)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(category.displayName)
+                            .font(CleanerTypography.body)
+                        Text(category.subtitle)
+                            .font(CleanerTypography.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: CleanerSpacing.sm)
+
+                    Toggle(category.displayName, isOn: categoryBinding(for: category))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .disabled(isLastEnabled)
+                        .accessibilityLabel(category.displayName)
+                        .accessibilityIdentifier("settingsCategoryToggle_\(category.rawValue)")
+                        .help(
+                            isLastEnabled
+                                ? "At least one scan category must stay enabled."
+                                : "Include \(category.displayName) when scanning"
+                        )
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(CleanerSpacing.md)
+        .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
+        .overlay(
+            RoundedRectangle(cornerRadius: CleanerRadii.md)
+                .stroke(CleanerColors.hairline, lineWidth: 1)
+        )
+    }
+
     private var safetyPolicyCard: some View {
         VStack(alignment: .leading, spacing: CleanerSpacing.sm) {
             Text("Protected-Path Rules")
@@ -274,6 +331,13 @@ public struct ScanSettingsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: CleanerRadii.md)
                 .stroke(CleanerColors.hairline, lineWidth: 1)
+        )
+    }
+
+    private func categoryBinding(for category: ScanCategory) -> Binding<Bool> {
+        Binding(
+            get: { store.configuration.categories.contains(category) },
+            set: { store.setCategory(category, enabled: $0) }
         )
     }
 

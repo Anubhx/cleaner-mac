@@ -55,12 +55,7 @@ public enum SidebarDestination: Hashable, Sendable {
     case settings
 }
 
-public enum ResultSortOrder: String, CaseIterable, Sendable {
-    case sizeDescending = "Largest First"
-    case dateOldest = "Oldest First"
-    case nameAscending = "Name (A–Z)"
-    case riskHighest = "Highest Risk"
-}
+public typealias ResultSortOrder = CleanerCore.ResultSortOrder
 
 public struct SnapshotBannerPresentation: Equatable, Sendable {
     public let staleness: SnapshotStaleness
@@ -77,12 +72,35 @@ public struct SnapshotBannerPresentation: Equatable, Sendable {
 @Observable
 @MainActor
 public final class CleanerWorkspaceStore {
-    public var selectedSidebarDestination: SidebarDestination = .category(.duplicates)
-    public var configuration: ScanConfiguration = ScanConfiguration()
+    public var selectedSidebarDestination: SidebarDestination = .category(.duplicates) {
+        didSet {
+            if case .category(let category) = selectedSidebarDestination {
+                guard lastSelectedCategory != category else { return }
+                lastSelectedCategory = category
+                scheduleSettingsSave()
+            }
+        }
+    }
+    public var configuration: ScanConfiguration = ScanConfiguration() {
+        didSet {
+            guard configuration != oldValue else { return }
+            scheduleSettingsSave()
+        }
+    }
     public var searchQuery: String = ""
-    public var sortOrder: ResultSortOrder = .sizeDescending
+    public var sortOrder: ResultSortOrder = .sizeDescending {
+        didSet {
+            guard sortOrder != oldValue else { return }
+            scheduleSettingsSave()
+        }
+    }
     public var isDryRunEnabled: Bool = false
-    public var isInspectorVisible: Bool = true
+    public var isInspectorVisible: Bool = true {
+        didSet {
+            guard isInspectorVisible != oldValue else { return }
+            scheduleSettingsSave()
+        }
+    }
 
     public var progress: ScanProgress = ScanProgress()
     public var volumeStorage: VolumeStorageSnapshot?
@@ -114,6 +132,7 @@ public final class CleanerWorkspaceStore {
     private let deleter: any DeletionServicing
     private let historyStore: any HistoryStoring
     private let snapshotStore: (any ScanSnapshotStoring)?
+    private let settingsStore: (any UserSettingsStoring)?
     private let previewService: any PreviewServicing
     private let permissionChecker: any FullDiskAccessChecking
     private let pathExists: @Sendable (URL) -> Bool
@@ -128,6 +147,12 @@ public final class CleanerWorkspaceStore {
     private var lastCompletedStartedAt: Date?
     private var lastCompletedFinishedAt: Date?
     private var lastCompletedProgress: ScanProgress?
+    private var isApplyingLoadedSettings = false
+    private var didAttemptInitialSettingsLoad = false
+    private var didRestoreCategoryPreference = false
+    private var lastSelectedCategory: ScanCategory = .duplicates
+    private var latestPendingSettings: UserSettings?
+    private var activeSettingsSaveTask: Task<Void, Never>?
     private let cancellationBag = WorkspaceCancellationBag()
     private let activationObserver = ApplicationActivationObserver()
 
@@ -136,6 +161,7 @@ public final class CleanerWorkspaceStore {
         deleter: any DeletionServicing,
         historyStore: any HistoryStoring,
         snapshotStore: (any ScanSnapshotStoring)? = nil,
+        settingsStore: (any UserSettingsStoring)? = nil,
         previewService: any PreviewServicing = PreviewService(),
         permissionChecker: any FullDiskAccessChecking = SystemFullDiskAccessChecker(),
         notificationCenter: NotificationCenter = .default,
@@ -152,6 +178,7 @@ public final class CleanerWorkspaceStore {
         self.deleter = deleter
         self.historyStore = historyStore
         self.snapshotStore = snapshotStore
+        self.settingsStore = settingsStore
         self.previewService = previewService
         self.permissionChecker = permissionChecker
         self.pathExists = pathExists
@@ -214,6 +241,86 @@ public final class CleanerWorkspaceStore {
         }
     }
 
+    public func loadInitialSettings() async {
+        // Safety rule: Dry-Run must ALWAYS start disabled on every launch.
+        isDryRunEnabled = false
+
+        guard let settingsStore, !didAttemptInitialSettingsLoad else { return }
+        didAttemptInitialSettingsLoad = true
+
+        let loaded = await Task.detached(priority: .userInitiated) {
+            await settingsStore.load()
+        }.value
+
+        isDryRunEnabled = false
+
+        guard let loaded else { return }
+
+        isApplyingLoadedSettings = true
+        defer { isApplyingLoadedSettings = false }
+
+        lastSelectedCategory = loaded.lastSelectedCategory
+        configuration = loaded.applying(to: configuration)
+        selectedSidebarDestination = .category(loaded.lastSelectedCategory)
+        sortOrder = loaded.sortOrder
+        isInspectorVisible = loaded.isInspectorVisible
+        didRestoreCategoryPreference = true
+    }
+
+    public func setCategory(_ category: ScanCategory, enabled: Bool) {
+        var updated = configuration.categories
+        if enabled {
+            updated.insert(category)
+        } else {
+            guard updated.count > 1 || !updated.contains(category) else {
+                return
+            }
+            updated.remove(category)
+        }
+        guard updated != configuration.categories else { return }
+        configuration.categories = updated
+    }
+
+    public func flushSettingsSave() async {
+        await activeSettingsSaveTask?.value
+    }
+
+    private func currentUserSettings() -> UserSettings {
+        UserSettings(
+            configuration: configuration,
+            lastSelectedCategory: lastSelectedCategory,
+            sortOrder: sortOrder,
+            isInspectorVisible: isInspectorVisible
+        )
+    }
+
+    private func scheduleSettingsSave() {
+        guard settingsStore != nil, !isApplyingLoadedSettings else { return }
+        latestPendingSettings = currentUserSettings()
+        guard activeSettingsSaveTask == nil else { return }
+
+        activeSettingsSaveTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.drainPendingSettingsSaves()
+        }
+    }
+
+    @MainActor
+    private func drainPendingSettingsSaves() async {
+        defer { activeSettingsSaveTask = nil }
+        guard let settingsStore else {
+            latestPendingSettings = nil
+            return
+        }
+
+        while let nextSettings = latestPendingSettings {
+            latestPendingSettings = nil
+            await Task.detached(priority: .utility) {
+                try? await settingsStore.save(nextSettings)
+            }.value
+        }
+    }
+
     public func loadInitialHistory() async {
         historyEntries = await historyStore.loadEntries()
         await refreshVolumeStorage()
@@ -264,7 +371,8 @@ public final class CleanerWorkspaceStore {
         lastCompletedFinishedAt = restored.finishedAt
         lastCompletedProgress = restored.progress
 
-        if selectedSidebarDestination == .category(.duplicates),
+        if !didRestoreCategoryPreference,
+           selectedSidebarDestination == .category(.duplicates),
            items(for: .duplicates).isEmpty,
            let firstNonEmpty = ScanCategory.allCases.first(where: { !items(for: $0).isEmpty }) {
             selectedSidebarDestination = .category(firstNonEmpty)

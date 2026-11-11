@@ -41,12 +41,14 @@ struct CleanerMacApp: App {
         let executor = DeletionExecutor()
         let historyStore = CleanHistoryStore()
         let snapshotStore = ScanSnapshotStore()
+        let settingsStore = UserSettingsStore()
         let permissionChecker = SystemFullDiskAccessChecker()
         let workspaceStore = CleanerWorkspaceStore(
             scanner: coordinator,
             deleter: executor,
             historyStore: historyStore,
             snapshotStore: snapshotStore,
+            settingsStore: settingsStore,
             previewService: PreviewService(),
             permissionChecker: permissionChecker
         )
@@ -75,6 +77,7 @@ struct CleanerMacApp: App {
         WindowGroup("CleanerMac") {
             CleanerRootView(store: store)
                 .task {
+                    await store.loadInitialSettings()
                     await store.loadInitialHistory()
                     await store.loadInitialSnapshot()
                 }

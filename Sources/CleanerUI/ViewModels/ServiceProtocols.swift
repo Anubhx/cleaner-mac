@@ -44,3 +44,8 @@ public protocol ScanSnapshotStoring: Sendable {
     func load() async -> ScanSnapshot?
     func save(_ snapshot: ScanSnapshot) async throws
 }
+
+public protocol UserSettingsStoring: Sendable {
+    func load() async -> UserSettings?
+    func save(_ settings: UserSettings) async throws
+}
