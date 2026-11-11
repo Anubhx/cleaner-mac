@@ -119,6 +119,7 @@ public struct BackgroundScanHUD: View {
     let progress: ScanProgress
     let isScanning: Bool
     let isPaused: Bool
+    let lastScannedAt: Date?
     let onPause: () -> Void
     let onResume: () -> Void
     let onCancel: () -> Void
@@ -128,6 +129,7 @@ public struct BackgroundScanHUD: View {
         progress: ScanProgress,
         isScanning: Bool,
         isPaused: Bool,
+        lastScannedAt: Date? = nil,
         onPause: @escaping () -> Void,
         onResume: @escaping () -> Void,
         onCancel: @escaping () -> Void,
@@ -136,6 +138,7 @@ public struct BackgroundScanHUD: View {
         self.progress = progress
         self.isScanning = isScanning
         self.isPaused = isPaused
+        self.lastScannedAt = lastScannedAt
         self.onPause = onPause
         self.onResume = onResume
         self.onCancel = onCancel
@@ -193,6 +196,11 @@ public struct BackgroundScanHUD: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            } else if !isScanning, let lastScannedAt {
+                Text("Saved \(lastScannedAt.formatted(date: .omitted, time: .shortened))")
+                    .font(CleanerTypography.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             if !isScanning, progress.phase == .completed || progress.phase == .cancelled, let onRescan {
@@ -235,6 +243,150 @@ public struct BackgroundScanHUD: View {
         case .paused: "pause.circle"
         case .completed: "checkmark.circle"
         case .cancelled: "xmark.circle"
+        }
+    }
+}
+
+public struct WorkspaceBannerBar: View {
+    public enum Tone: Equatable, Sendable {
+        case info
+        case subtleCaution
+        case plainNote
+        case subtleStale
+        case prominentWarning
+    }
+
+    let tone: Tone
+    let symbolName: String
+    let primaryText: String
+    let secondaryText: String?
+    let actionTitle: String?
+    let actionAccessibilityLabel: String?
+    let actionIdentifier: String?
+    let actionHelp: String?
+    let onAction: (() -> Void)?
+    let dismissAccessibilityLabel: String
+    let accessibilityIdentifier: String
+    let onDismiss: () -> Void
+
+    public init(
+        tone: Tone,
+        symbolName: String,
+        primaryText: String,
+        secondaryText: String? = nil,
+        actionTitle: String? = nil,
+        actionAccessibilityLabel: String? = nil,
+        actionIdentifier: String? = nil,
+        actionHelp: String? = nil,
+        onAction: (() -> Void)? = nil,
+        dismissAccessibilityLabel: String = "Dismiss status banner",
+        accessibilityIdentifier: String,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.tone = tone
+        self.symbolName = symbolName
+        self.primaryText = primaryText
+        self.secondaryText = secondaryText
+        self.actionTitle = actionTitle
+        self.actionAccessibilityLabel = actionAccessibilityLabel
+        self.actionIdentifier = actionIdentifier
+        self.actionHelp = actionHelp
+        self.onAction = onAction
+        self.dismissAccessibilityLabel = dismissAccessibilityLabel
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.onDismiss = onDismiss
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: CleanerSpacing.sm) {
+                Image(systemName: symbolName)
+                    .font(tone == .prominentWarning ? .title3 : .body)
+                    .foregroundStyle(iconColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primaryText)
+                        .font(tone == .prominentWarning ? CleanerTypography.headline : CleanerTypography.callout)
+                        .foregroundStyle(tone == .plainNote ? .secondary : .primary)
+                        .lineLimit(2)
+
+                    if let secondaryText, !secondaryText.isEmpty {
+                        Text(secondaryText)
+                            .font(CleanerTypography.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer()
+
+                if let actionTitle, let onAction {
+                    if tone == .prominentWarning {
+                        Button(actionTitle, action: onAction)
+                            .buttonStyle(.borderedProminent)
+                            .tint(CleanerColors.caution)
+                            .controlSize(.small)
+                            .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                            .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
+                            .help(actionHelp ?? actionTitle)
+                    } else {
+                        Button(actionTitle, action: onAction)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                            .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
+                            .help(actionHelp ?? actionTitle)
+                    }
+                }
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(dismissAccessibilityLabel)
+                .help("Dismiss banner")
+            }
+            .padding(.horizontal, CleanerSpacing.md)
+            .padding(.vertical, tone == .prominentWarning ? CleanerSpacing.sm : CleanerSpacing.xs)
+            .background(backgroundFill)
+            .overlay(alignment: .leading) {
+                if tone == .prominentWarning {
+                    Rectangle()
+                        .fill(CleanerColors.caution)
+                        .frame(width: 3)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(accessibilityIdentifier)
+
+            if tone == .prominentWarning {
+                Rectangle()
+                    .fill(CleanerColors.caution.opacity(0.45))
+                    .frame(height: 1)
+            } else {
+                Divider()
+            }
+        }
+    }
+
+    private var iconColor: Color {
+        switch tone {
+        case .info:
+            Color.accentColor
+        case .subtleCaution, .prominentWarning:
+            CleanerColors.caution
+        case .plainNote, .subtleStale:
+            Color.secondary
+        }
+    }
+
+    private var backgroundFill: Color {
+        switch tone {
+        case .prominentWarning:
+            CleanerColors.caution.opacity(0.14)
+        case .info, .subtleCaution, .plainNote, .subtleStale:
+            Color(nsColor: .controlBackgroundColor)
         }
     }
 }

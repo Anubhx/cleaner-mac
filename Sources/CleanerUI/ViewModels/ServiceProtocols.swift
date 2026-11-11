@@ -39,3 +39,8 @@ public protocol HistoryStoring: Sendable {
     func append(_ newEntries: [TrashHistoryEntry]) async
     func remove(ids: Set<UUID>) async
 }
+
+public protocol ScanSnapshotStoring: Sendable {
+    func load() async -> ScanSnapshot?
+    func save(_ snapshot: ScanSnapshot) async throws
+}

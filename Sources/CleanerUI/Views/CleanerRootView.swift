@@ -132,6 +132,7 @@ public struct CleanerRootView: View {
                     progress: store.progress,
                     isScanning: store.isScanning,
                     isPaused: store.isPaused,
+                    lastScannedAt: store.loadedSnapshotFinishedAt,
                     onPause: { Task { await store.pauseScan() } },
                     onResume: { Task { await store.resumeScan() } },
                     onCancel: { Task { await store.cancelScan() } },
@@ -178,37 +179,23 @@ public struct CleanerRootView: View {
 
             if let banner = store.statusBannerMessage {
                 let isLimitedBanner = store.isLimitedScanBannerVisible
-                HStack(spacing: CleanerSpacing.xs) {
-                    Image(systemName: isLimitedBanner ? "exclamationmark.triangle.fill" : "info.circle")
-                        .foregroundStyle(isLimitedBanner ? CleanerColors.caution : Color.accentColor)
-                    Text(banner)
-                        .font(CleanerTypography.callout)
-                        .lineLimit(2)
-                    Spacer()
-                    if isLimitedBanner {
-                        Button("Open Full Disk Access Settings…") {
-                            store.openFullDiskAccessSettings()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .accessibilityLabel("Open Full Disk Access Settings")
-                        .accessibilityIdentifier("bannerOpenFullDiskAccessButton")
-                        .help("Open Privacy & Security > Full Disk Access in System Settings")
-                    }
-                    Button {
-                        store.statusBannerMessage = nil
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Dismiss status banner")
-                    .help("Dismiss banner")
-                }
-                .padding(.horizontal, CleanerSpacing.md)
-                .padding(.vertical, CleanerSpacing.xs)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .accessibilityIdentifier("workspaceStatusBanner")
-                Divider()
+                WorkspaceBannerBar(
+                    tone: isLimitedBanner ? .subtleCaution : .info,
+                    symbolName: isLimitedBanner ? "exclamationmark.triangle.fill" : "info.circle",
+                    primaryText: banner,
+                    actionTitle: isLimitedBanner ? "Open Full Disk Access Settings…" : nil,
+                    actionAccessibilityLabel: isLimitedBanner ? "Open Full Disk Access Settings" : nil,
+                    actionIdentifier: isLimitedBanner ? "bannerOpenFullDiskAccessButton" : nil,
+                    actionHelp: isLimitedBanner ? "Open Privacy & Security > Full Disk Access in System Settings" : nil,
+                    onAction: isLimitedBanner ? { store.openFullDiskAccessSettings() } : nil,
+                    dismissAccessibilityLabel: "Dismiss status banner",
+                    accessibilityIdentifier: "workspaceStatusBanner",
+                    onDismiss: { store.statusBannerMessage = nil }
+                )
+            }
+
+            if let snapshotBanner = store.snapshotBannerPresentation {
+                snapshotBannerView(for: snapshotBanner)
             }
 
             switch store.selectedSidebarDestination {
@@ -269,6 +256,46 @@ public struct CleanerRootView: View {
                 .accessibilityLabel(store.primaryScanActionTitle)
             }
         }
+    }
+
+    private func snapshotBannerView(for presentation: SnapshotBannerPresentation) -> some View {
+        let tone: WorkspaceBannerBar.Tone
+        let symbolName: String
+        let actionTitle: String?
+        let onAction: (() -> Void)?
+
+        switch presentation.staleness {
+        case .fresh:
+            tone = .plainNote
+            symbolName = "clock"
+            actionTitle = nil
+            onAction = nil
+        case .subtle:
+            tone = .subtleStale
+            symbolName = "clock.arrow.circlepath"
+            actionTitle = "Scan Again"
+            onAction = { Task { await store.startScan() } }
+        case .stale:
+            tone = .prominentWarning
+            symbolName = "exclamationmark.triangle.fill"
+            actionTitle = "Scan Again"
+            onAction = { Task { await store.startScan() } }
+        }
+
+        return WorkspaceBannerBar(
+            tone: tone,
+            symbolName: symbolName,
+            primaryText: presentation.primaryText,
+            secondaryText: presentation.secondaryText,
+            actionTitle: actionTitle,
+            actionAccessibilityLabel: actionTitle,
+            actionIdentifier: "snapshotBannerRescanButton",
+            actionHelp: actionTitle != nil ? "Run a fresh scan before deleting files (Cmd+R)" : nil,
+            onAction: onAction,
+            dismissAccessibilityLabel: "Dismiss last scan banner",
+            accessibilityIdentifier: "snapshotStatusBanner",
+            onDismiss: { store.dismissSnapshotBanner() }
+        )
     }
 
     @ToolbarContentBuilder

@@ -62,6 +62,18 @@ public enum ResultSortOrder: String, CaseIterable, Sendable {
     case riskHighest = "Highest Risk"
 }
 
+public struct SnapshotBannerPresentation: Equatable, Sendable {
+    public let staleness: SnapshotStaleness
+    public let primaryText: String
+    public let secondaryText: String?
+
+    public init(staleness: SnapshotStaleness, primaryText: String, secondaryText: String?) {
+        self.staleness = staleness
+        self.primaryText = primaryText
+        self.secondaryText = secondaryText
+    }
+}
+
 @Observable
 @MainActor
 public final class CleanerWorkspaceStore {
@@ -80,6 +92,12 @@ public final class CleanerWorkspaceStore {
     public var duplicateGroups: [DuplicateGroup] = []
     public var historyEntries: [TrashHistoryEntry] = []
 
+    public private(set) var loadedSnapshotFinishedAt: Date?
+    public private(set) var loadedSnapshotAge: TimeInterval?
+    public var isSnapshotBannerDismissed: Bool = false
+    public private(set) var unavailableSnapshotRoots: [URL] = []
+    public private(set) var unavailableSnapshotItems: [ScannedItem] = []
+
     public var selection: MultiSelectState = MultiSelectState()
     public var previewPayload: PreviewPayload?
     public var isLoadingPreview: Bool = false
@@ -95,12 +113,21 @@ public final class CleanerWorkspaceStore {
     private let scanner: any ScanningServicing
     private let deleter: any DeletionServicing
     private let historyStore: any HistoryStoring
+    private let snapshotStore: (any ScanSnapshotStoring)?
     private let previewService: any PreviewServicing
     private let permissionChecker: any FullDiskAccessChecking
+    private let pathExists: @Sendable (URL) -> Bool
+    private let nowProvider: @Sendable () -> Date
+    private let appVersionProvider: @Sendable () -> String
     private let openURLHandler: @MainActor (URL) -> Bool
 
     private var savedCheckpoint: ScanCheckpoint?
     private var activeScanID = UUID()
+    private var activeScanConfiguration: ScanConfiguration?
+    private var lastCompletedSnapshotConfiguration: ScanConfiguration?
+    private var lastCompletedStartedAt: Date?
+    private var lastCompletedFinishedAt: Date?
+    private var lastCompletedProgress: ScanProgress?
     private let cancellationBag = WorkspaceCancellationBag()
     private let activationObserver = ApplicationActivationObserver()
 
@@ -108,16 +135,28 @@ public final class CleanerWorkspaceStore {
         scanner: any ScanningServicing,
         deleter: any DeletionServicing,
         historyStore: any HistoryStoring,
+        snapshotStore: (any ScanSnapshotStoring)? = nil,
         previewService: any PreviewServicing = PreviewService(),
         permissionChecker: any FullDiskAccessChecking = SystemFullDiskAccessChecker(),
         notificationCenter: NotificationCenter = .default,
+        pathExists: @escaping @Sendable (URL) -> Bool = {
+            FileManager.default.fileExists(atPath: $0.standardizedFileURL.path(percentEncoded: false))
+        },
+        nowProvider: @escaping @Sendable () -> Date = { Date() },
+        appVersionProvider: @escaping @Sendable () -> String = {
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+        },
         openURLHandler: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         self.scanner = scanner
         self.deleter = deleter
         self.historyStore = historyStore
+        self.snapshotStore = snapshotStore
         self.previewService = previewService
         self.permissionChecker = permissionChecker
+        self.pathExists = pathExists
+        self.nowProvider = nowProvider
+        self.appVersionProvider = appVersionProvider
         self.openURLHandler = openURLHandler
         self.permissionStatus = permissionChecker.checkStatus()
         self.activationObserver.observeApplicationActivation(on: notificationCenter) { [weak self] in
@@ -178,6 +217,118 @@ public final class CleanerWorkspaceStore {
     public func loadInitialHistory() async {
         historyEntries = await historyStore.loadEntries()
         await refreshVolumeStorage()
+    }
+
+    public func loadInitialSnapshot() async {
+        guard let snapshotStore,
+              !isScanning,
+              itemsByCategory.isEmpty,
+              duplicateGroups.isEmpty,
+              progress.phase == .idle else {
+            return
+        }
+
+        let initialGeneration = activeScanID
+        let checker = pathExists
+        let restored = await Task.detached(priority: .utility) {
+            guard let snapshot = await snapshotStore.load() else {
+                return Optional<RestoredScanSnapshot>.none
+            }
+            return ScanSnapshotRestorer.restore(from: snapshot, pathExists: checker)
+        }.value
+
+        guard !Task.isCancelled,
+              !isScanning,
+              activeScanID == initialGeneration,
+              itemsByCategory.isEmpty,
+              duplicateGroups.isEmpty,
+              progress.phase == .idle,
+              let restored else {
+            return
+        }
+
+        itemsByCategory = restored.itemsByCategory
+        duplicateGroups = restored.duplicateGroups
+        selection = MultiSelectState()
+        pendingDeletionItems = []
+        previewPayload = nil
+        isLoadingPreview = false
+        progress = restored.progress
+        unavailableSnapshotRoots = restored.unavailableRoots
+        unavailableSnapshotItems = restored.unavailableItems
+        loadedSnapshotFinishedAt = restored.finishedAt
+        loadedSnapshotAge = max(0, nowProvider().timeIntervalSince(restored.finishedAt))
+        isSnapshotBannerDismissed = false
+        lastCompletedSnapshotConfiguration = restored.configuration
+        lastCompletedStartedAt = restored.startedAt
+        lastCompletedFinishedAt = restored.finishedAt
+        lastCompletedProgress = restored.progress
+
+        if selectedSidebarDestination == .category(.duplicates),
+           items(for: .duplicates).isEmpty,
+           let firstNonEmpty = ScanCategory.allCases.first(where: { !items(for: $0).isEmpty }) {
+            selectedSidebarDestination = .category(firstNonEmpty)
+        }
+    }
+
+    public var loadedSnapshotStaleness: SnapshotStaleness? {
+        guard let age = loadedSnapshotAge else { return nil }
+        return SnapshotStaleness.classify(age: age)
+    }
+
+    public var isSnapshotBannerVisible: Bool {
+        loadedSnapshotFinishedAt != nil
+            && loadedSnapshotStaleness != nil
+            && !isSnapshotBannerDismissed
+            && !isScanning
+    }
+
+    public var snapshotBannerPresentation: SnapshotBannerPresentation? {
+        guard isSnapshotBannerVisible,
+              let finishedAt = loadedSnapshotFinishedAt,
+              let staleness = loadedSnapshotStaleness else {
+            return nil
+        }
+
+        let shortTime = Calendar.current.isDateInToday(finishedAt)
+            ? finishedAt.formatted(date: .omitted, time: .shortened)
+            : finishedAt.formatted(date: .abbreviated, time: .shortened)
+        let fullDateTime = finishedAt.formatted(date: .abbreviated, time: .shortened)
+        let unavailableNote: String? = unavailableSnapshotRoots.isEmpty
+            ? nil
+            : {
+                let count = unavailableSnapshotRoots.count
+                let folderWord = count == 1 ? "folder" : "folders"
+                return "Excluded \(count) unavailable scan \(folderWord) that no longer exist on disk."
+            }()
+
+        switch staleness {
+        case .fresh:
+            return SnapshotBannerPresentation(
+                staleness: .fresh,
+                primaryText: "Last scanned \(shortTime)",
+                secondaryText: unavailableNote
+            )
+        case .subtle:
+            return SnapshotBannerPresentation(
+                staleness: .subtle,
+                primaryText: "Last scanned \(shortTime) — Results may be outdated.",
+                secondaryText: unavailableNote
+            )
+        case .stale:
+            let detail = ["Last scanned \(fullDateTime)", unavailableNote]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+            return SnapshotBannerPresentation(
+                staleness: .stale,
+                primaryText: "Results are from a previous session. Re-verify before deleting.",
+                secondaryText: detail
+            )
+        }
+    }
+
+    public func dismissSnapshotBanner() {
+        isSnapshotBannerDismissed = true
     }
 
     public func refreshVolumeStorage() async {
@@ -305,6 +456,8 @@ public final class CleanerWorkspaceStore {
     public func startScan() async {
         let scanID = UUID()
         activeScanID = scanID
+        let scanConfig = configuration
+        activeScanConfiguration = scanConfig
         cancellationBag.cancel("stream")
         cancellationBag.cancel("preview")
 
@@ -314,6 +467,15 @@ public final class CleanerWorkspaceStore {
         previewPayload = nil
         isLoadingPreview = false
         savedCheckpoint = nil
+        loadedSnapshotFinishedAt = nil
+        loadedSnapshotAge = nil
+        isSnapshotBannerDismissed = false
+        unavailableSnapshotRoots = []
+        unavailableSnapshotItems = []
+        lastCompletedSnapshotConfiguration = nil
+        lastCompletedStartedAt = nil
+        lastCompletedFinishedAt = nil
+        lastCompletedProgress = nil
         isScanning = true
         isPaused = false
         progress = ScanProgress(phase: .enumerating, currentPath: "Preparing scan…")
@@ -338,8 +500,8 @@ public final class CleanerWorkspaceStore {
         }
         cancellationBag.replace("stream", with: streamTask)
 
-        let outcome = await scanner.runFullScan(configuration: configuration)
-        await applyCompletedOutcome(outcome, for: scanID)
+        let outcome = await scanner.runFullScan(configuration: scanConfig)
+        await applyCompletedOutcome(outcome, configuration: scanConfig, for: scanID)
     }
 
     public func pauseScan() async {
@@ -355,15 +517,17 @@ public final class CleanerWorkspaceStore {
     public func resumeScan() async {
         guard let checkpoint = savedCheckpoint else { return }
         let scanID = activeScanID
+        activeScanConfiguration = checkpoint.configuration
         isPaused = false
         isScanning = true
         let outcome = await scanner.resume(from: checkpoint)
-        await applyCompletedOutcome(outcome, for: scanID)
+        await applyCompletedOutcome(outcome, configuration: checkpoint.configuration, for: scanID)
     }
 
     public func cancelScan() async {
         let scanID = UUID()
         activeScanID = scanID
+        activeScanConfiguration = nil
         cancellationBag.cancel("stream")
         let outcome = await scanner.cancel()
         guard activeScanID == scanID else { return }
@@ -502,6 +666,9 @@ public final class CleanerWorkspaceStore {
             if !report.isDryRun {
                 let removedURLs = Set(report.succeededItems.map(\.url))
                 removeURLsFromResults(removedURLs)
+                if !removedURLs.isEmpty {
+                    await persistUpdatedSnapshotAfterCleanup()
+                }
                 if !report.trashHistoryEntries.isEmpty {
                     await historyStore.append(report.trashHistoryEntries)
                     historyEntries = await historyStore.loadEntries()
@@ -524,7 +691,11 @@ public final class CleanerWorkspaceStore {
         }
     }
 
-    private func applyCompletedOutcome(_ outcome: ScanOutcome, for scanID: UUID) async {
+    private func applyCompletedOutcome(
+        _ outcome: ScanOutcome,
+        configuration runConfiguration: ScanConfiguration,
+        for scanID: UUID
+    ) async {
         guard activeScanID == scanID else { return }
         if outcome.progress.phase == .paused {
             progress = outcome.progress
@@ -534,14 +705,29 @@ public final class CleanerWorkspaceStore {
         isScanning = false
         isPaused = false
         savedCheckpoint = nil
+        activeScanConfiguration = nil
         progress = outcome.progress
         if !outcome.wasCancelled {
             for category in ScanCategory.allCases {
-                if configuration.categories.contains(category) {
+                if runConfiguration.categories.contains(category) {
                     itemsByCategory[category] = outcome.items(in: category)
                 }
             }
             duplicateGroups = outcome.duplicateGroups
+            if outcome.progress.phase == .completed {
+                let startedAt = outcome.progress.startedAt
+                let finishedAt = nowProvider()
+                lastCompletedSnapshotConfiguration = runConfiguration
+                lastCompletedStartedAt = startedAt
+                lastCompletedFinishedAt = finishedAt
+                lastCompletedProgress = outcome.progress
+                await persistCurrentSnapshot(
+                    configuration: runConfiguration,
+                    startedAt: startedAt,
+                    finishedAt: finishedAt,
+                    progress: outcome.progress
+                )
+            }
         }
         if let first = visibleItems.first, selection.focusedID == nil {
             selection.handleClick(id: first.id, modifiers: [], orderedIDs: visibleItems.map(\.id))
@@ -555,6 +741,66 @@ public final class CleanerWorkspaceStore {
             statusBannerMessage = "Limited scan mode: Skipped \(outcome.progress.skippedProtectedDirectories) protected \(folderWord) without Full Disk Access."
         }
         await refreshVolumeStorage()
+    }
+
+    private func persistUpdatedSnapshotAfterCleanup() async {
+        guard let config = lastCompletedSnapshotConfiguration,
+              let startedAt = lastCompletedStartedAt,
+              let finishedAt = lastCompletedFinishedAt,
+              let completedProgress = lastCompletedProgress,
+              completedProgress.phase == .completed else {
+            return
+        }
+        await persistCurrentSnapshot(
+            configuration: config,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            progress: completedProgress
+        )
+    }
+
+    private func persistCurrentSnapshot(
+        configuration snapshotConfiguration: ScanConfiguration,
+        startedAt: Date,
+        finishedAt: Date,
+        progress snapshotProgress: ScanProgress
+    ) async {
+        guard let snapshotStore, snapshotProgress.phase == .completed else { return }
+
+        let categorySnapshots: [CategorySnapshot] = ScanCategory.allCases.compactMap { category in
+            let current = itemsByCategory[category] ?? []
+            guard snapshotConfiguration.categories.contains(category) || !current.isEmpty else {
+                return nil
+            }
+            return CategorySnapshot(category: category, items: current)
+        }
+
+        let snapshot = ScanSnapshot(
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            duration: max(0, finishedAt.timeIntervalSince(startedAt)),
+            appVersion: appVersionProvider(),
+            configuration: snapshotConfiguration,
+            progress: snapshotProgress,
+            categories: categorySnapshots,
+            duplicateGroups: duplicateGroups,
+            totalReclaimableBytes: currentTotalReclaimableBytes()
+        )
+
+        try? await snapshotStore.save(snapshot)
+    }
+
+    private func currentTotalReclaimableBytes() -> UInt64 {
+        var seenURLs = Set<URL>()
+        var total: UInt64 = 0
+        for category in ScanCategory.allCases {
+            for item in items(for: category) where !item.isRecommendedKeep {
+                if seenURLs.insert(item.url).inserted {
+                    total &+= item.reclaimableDiskBytes
+                }
+            }
+        }
+        return total
     }
 
     private func removeURLsFromResults(_ removedURLs: Set<URL>) {

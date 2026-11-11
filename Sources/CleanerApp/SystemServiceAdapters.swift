@@ -10,3 +10,4 @@ extension ScanCoordinator: ScanningServicing {
 }
 extension DeletionExecutor: DeletionServicing {}
 extension CleanHistoryStore: HistoryStoring {}
+extension ScanSnapshotStore: ScanSnapshotStoring {}
