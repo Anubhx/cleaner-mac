@@ -378,6 +378,10 @@ private struct PDFKitRepresentable: NSViewRepresentable {
     }
 }
 
+private struct PlaybackObserverTokenBox: @unchecked Sendable {
+    let token: any NSObjectProtocol
+}
+
 private struct AudioMetadataCardView: View {
     let data: AudioPreviewData
     @State private var player: AVPlayer?
@@ -431,11 +435,22 @@ private struct AudioMetadataCardView: View {
         .task(id: playbackSessionID) {
             guard playbackSessionID != nil,
                   let playerItem = player?.currentItem else { return }
-            let notifications = NotificationCenter.default.notifications(
-                named: .AVPlayerItemDidPlayToEndTime,
-                object: playerItem
-            )
-            for await _ in notifications {
+            let didEndStream = AsyncStream<Void> { continuation in
+                let box = PlaybackObserverTokenBox(
+                    token: NotificationCenter.default.addObserver(
+                        forName: .AVPlayerItemDidPlayToEndTime,
+                        object: playerItem,
+                        queue: .main
+                    ) { _ in
+                        continuation.yield()
+                        continuation.finish()
+                    }
+                )
+                continuation.onTermination = { _ in
+                    NotificationCenter.default.removeObserver(box.token)
+                }
+            }
+            for await _ in didEndStream {
                 guard !Task.isCancelled else { break }
                 stopPlayback()
                 break
