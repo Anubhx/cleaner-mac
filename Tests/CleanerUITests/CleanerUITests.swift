@@ -910,6 +910,23 @@ struct CleanerUITests {
 
         #expect(model.permissionStatus == .notGranted)
         model.selectStep(.permissions)
+
+        enableSwiftUIAccessibilityTree()
+        let hostingController = NSHostingController(rootView: WelcomeOnboardingView(model: model, reduceMotionOverride: true))
+        let window = NSWindow(contentViewController: hostingController)
+        window.setContentSize(WelcomeOnboardingPolicy.windowSize)
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        let fittedSize = hostingController.sizeThatFits(in: WelcomeOnboardingPolicy.windowSize)
+        #expect(fittedSize.width <= 680.5)
+        #expect(fittedSize.height <= 440.5)
+        #expect(containsText("Quit & Reopen", in: window.contentView))
+        #expect(containsText("Later", in: window.contentView))
+
         #expect(model.openFullDiskAccessSettings() == true)
         #expect(openedURLs == [SystemFullDiskAccessChecker.fullDiskAccessSettingsURL])
 

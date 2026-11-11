@@ -613,7 +613,7 @@ public struct WelcomeOnboardingView: View {
                     .stroke(CleanerColors.hairline, lineWidth: 1)
             )
 
-            Text("Enable CleanerMac in System Settings > Privacy & Security > Full Disk Access, then return to this window to update status automatically.")
+            Text("Enable CleanerMac in System Settings > Privacy & Security > Full Disk Access. Pick Quit & Reopen if macOS prompts so access takes effect immediately (or Later to refresh status on return).")
                 .font(CleanerTypography.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
