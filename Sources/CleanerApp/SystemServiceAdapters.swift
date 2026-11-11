@@ -12,3 +12,4 @@ extension DeletionExecutor: DeletionServicing {}
 extension CleanHistoryStore: HistoryStoring {}
 extension ScanSnapshotStore: ScanSnapshotStoring {}
 extension UserSettingsStore: UserSettingsStoring {}
+extension ScanCheckpointStore: ScanCheckpointStoring {}

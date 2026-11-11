@@ -37,7 +37,8 @@ struct CleanerMacApp: App {
 
     init() {
         InstrumentSerifFontRegistrar.registerBundledFonts()
-        let coordinator = ScanCoordinator()
+        let checkpointStore = ScanCheckpointStore()
+        let coordinator = ScanCoordinator(checkpointStore: checkpointStore)
         let executor = DeletionExecutor()
         let historyStore = CleanHistoryStore()
         let snapshotStore = ScanSnapshotStore()
@@ -49,6 +50,7 @@ struct CleanerMacApp: App {
             historyStore: historyStore,
             snapshotStore: snapshotStore,
             settingsStore: settingsStore,
+            checkpointStore: checkpointStore,
             previewService: PreviewService(),
             permissionChecker: permissionChecker
         )
@@ -80,6 +82,7 @@ struct CleanerMacApp: App {
                     await store.loadInitialSettings()
                     await store.loadInitialHistory()
                     await store.loadInitialSnapshot()
+                    await store.loadInitialCheckpoint()
                 }
                 .onAppear {
                     guard !didEvaluateFirstLaunchWelcome else { return }

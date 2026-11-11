@@ -16,10 +16,12 @@ public protocol ScanningServicing: Sendable {
     func resume(from checkpoint: ScanCheckpoint) async -> ScanOutcome
     func cancel() async -> ScanOutcome
     func volumeStorageSnapshot(for root: URL) async -> VolumeStorageSnapshot?
+    nonisolated func captureCheckpointSynchronously() -> ScanCheckpoint?
 }
 
 public extension ScanningServicing {
     func volumeStorageSnapshot(for root: URL) async -> VolumeStorageSnapshot? { nil }
+    nonisolated func captureCheckpointSynchronously() -> ScanCheckpoint? { nil }
 }
 
 public protocol DeletionServicing: Sendable {
@@ -48,4 +50,11 @@ public protocol ScanSnapshotStoring: Sendable {
 public protocol UserSettingsStoring: Sendable {
     func load() async -> UserSettings?
     func save(_ settings: UserSettings) async throws
+}
+
+public protocol ScanCheckpointStoring: Sendable {
+    func load() async -> ScanCheckpointLoadResult
+    func save(_ checkpoint: ScanCheckpoint) async throws
+    nonisolated func saveSynchronously(_ checkpoint: ScanCheckpoint) throws
+    func clear() async
 }

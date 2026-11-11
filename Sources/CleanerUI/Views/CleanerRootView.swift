@@ -194,6 +194,10 @@ public struct CleanerRootView: View {
                 )
             }
 
+            if let checkpointBanner = store.interruptedCheckpointPresentation {
+                interruptedCheckpointBannerView(for: checkpointBanner)
+            }
+
             if let snapshotBanner = store.snapshotBannerPresentation {
                 snapshotBannerView(for: snapshotBanner)
             }
@@ -256,6 +260,28 @@ public struct CleanerRootView: View {
                 .accessibilityLabel(store.primaryScanActionTitle)
             }
         }
+    }
+
+    private func interruptedCheckpointBannerView(for presentation: InterruptedCheckpointPresentation) -> some View {
+        WorkspaceBannerBar(
+            tone: .info,
+            symbolName: "clock.arrow.circlepath",
+            primaryText: presentation.primaryText,
+            secondaryText: presentation.secondaryText,
+            actionTitle: "Resume",
+            actionAccessibilityLabel: "Resume interrupted scan",
+            actionIdentifier: "checkpointResumeButton",
+            actionHelp: "Resume the interrupted scan from where it stopped",
+            onAction: { Task { await store.resumeInterruptedScan() } },
+            secondaryActionTitle: "Start Fresh",
+            secondaryActionAccessibilityLabel: "Start fresh scan",
+            secondaryActionIdentifier: "checkpointStartFreshButton",
+            secondaryActionHelp: "Discard the saved checkpoint and run a new scan",
+            onSecondaryAction: { Task { await store.startFreshFromInterruptedCheckpoint() } },
+            dismissAccessibilityLabel: "Dismiss interrupted scan prompt",
+            accessibilityIdentifier: "interruptedCheckpointBanner",
+            onDismiss: { Task { await store.discardInterruptedCheckpoint() } }
+        )
     }
 
     private func snapshotBannerView(for presentation: SnapshotBannerPresentation) -> some View {

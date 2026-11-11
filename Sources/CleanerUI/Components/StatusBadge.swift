@@ -265,6 +265,11 @@ public struct WorkspaceBannerBar: View {
     let actionIdentifier: String?
     let actionHelp: String?
     let onAction: (() -> Void)?
+    let secondaryActionTitle: String?
+    let secondaryActionAccessibilityLabel: String?
+    let secondaryActionIdentifier: String?
+    let secondaryActionHelp: String?
+    let onSecondaryAction: (() -> Void)?
     let dismissAccessibilityLabel: String
     let accessibilityIdentifier: String
     let onDismiss: () -> Void
@@ -279,6 +284,11 @@ public struct WorkspaceBannerBar: View {
         actionIdentifier: String? = nil,
         actionHelp: String? = nil,
         onAction: (() -> Void)? = nil,
+        secondaryActionTitle: String? = nil,
+        secondaryActionAccessibilityLabel: String? = nil,
+        secondaryActionIdentifier: String? = nil,
+        secondaryActionHelp: String? = nil,
+        onSecondaryAction: (() -> Void)? = nil,
         dismissAccessibilityLabel: String = "Dismiss status banner",
         accessibilityIdentifier: String,
         onDismiss: @escaping () -> Void
@@ -292,6 +302,11 @@ public struct WorkspaceBannerBar: View {
         self.actionIdentifier = actionIdentifier
         self.actionHelp = actionHelp
         self.onAction = onAction
+        self.secondaryActionTitle = secondaryActionTitle
+        self.secondaryActionAccessibilityLabel = secondaryActionAccessibilityLabel
+        self.secondaryActionIdentifier = secondaryActionIdentifier
+        self.secondaryActionHelp = secondaryActionHelp
+        self.onSecondaryAction = onSecondaryAction
         self.dismissAccessibilityLabel = dismissAccessibilityLabel
         self.accessibilityIdentifier = accessibilityIdentifier
         self.onDismiss = onDismiss
@@ -319,6 +334,15 @@ public struct WorkspaceBannerBar: View {
                 }
 
                 Spacer()
+
+                if let secondaryActionTitle, let onSecondaryAction {
+                    Button(secondaryActionTitle, action: onSecondaryAction)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel(secondaryActionAccessibilityLabel ?? secondaryActionTitle)
+                        .accessibilityIdentifier(secondaryActionIdentifier ?? "\(accessibilityIdentifier)SecondaryActionButton")
+                        .help(secondaryActionHelp ?? secondaryActionTitle)
+                }
 
                 if let actionTitle, let onAction {
                     if tone == .prominentWarning {

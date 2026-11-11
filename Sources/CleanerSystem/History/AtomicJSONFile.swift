@@ -35,6 +35,10 @@ enum AtomicJSONFile {
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(value)
+        try saveData(data, to: fileURL)
+    }
+
+    static func saveData(_ data: Data, to fileURL: URL) throws {
 
         let fileManager = FileManager.default
         let directoryURL = fileURL.deletingLastPathComponent()
@@ -100,7 +104,7 @@ enum AtomicJSONFile {
         movedIntoPlace = true
     }
 
-    private static func quarantineCorruptedFile(at fileURL: URL, fileManager: FileManager) {
+    static func quarantineCorruptedFile(at fileURL: URL, fileManager: FileManager = .default) {
         let directoryURL = fileURL.deletingLastPathComponent()
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]

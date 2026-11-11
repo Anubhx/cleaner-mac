@@ -69,6 +69,21 @@ public struct SnapshotBannerPresentation: Equatable, Sendable {
     }
 }
 
+public struct InterruptedCheckpointPresentation: Equatable, Sendable {
+    public let primaryText: String
+    public let secondaryText: String?
+
+    public init(primaryText: String, secondaryText: String?) {
+        self.primaryText = primaryText
+        self.secondaryText = secondaryText
+    }
+}
+
+private struct PendingInterruptedCheckpoint {
+    let checkpoint: ScanCheckpoint
+    let savedAt: Date
+}
+
 @Observable
 @MainActor
 public final class CleanerWorkspaceStore {
@@ -133,6 +148,7 @@ public final class CleanerWorkspaceStore {
     private let historyStore: any HistoryStoring
     private let snapshotStore: (any ScanSnapshotStoring)?
     private let settingsStore: (any UserSettingsStoring)?
+    private let checkpointStore: (any ScanCheckpointStoring)?
     private let previewService: any PreviewServicing
     private let permissionChecker: any FullDiskAccessChecking
     private let pathExists: @Sendable (URL) -> Bool
@@ -140,6 +156,7 @@ public final class CleanerWorkspaceStore {
     private let appVersionProvider: @Sendable () -> String
     private let openURLHandler: @MainActor (URL) -> Bool
 
+    private var pendingInterruptedCheckpoint: PendingInterruptedCheckpoint?
     private var savedCheckpoint: ScanCheckpoint?
     private var activeScanID = UUID()
     private var activeScanConfiguration: ScanConfiguration?
@@ -149,6 +166,7 @@ public final class CleanerWorkspaceStore {
     private var lastCompletedProgress: ScanProgress?
     private var isApplyingLoadedSettings = false
     private var didAttemptInitialSettingsLoad = false
+    private var didAttemptInitialCheckpointLoad = false
     private var didRestoreCategoryPreference = false
     private var lastSelectedCategory: ScanCategory = .duplicates
     private var latestPendingSettings: UserSettings?
@@ -162,6 +180,7 @@ public final class CleanerWorkspaceStore {
         historyStore: any HistoryStoring,
         snapshotStore: (any ScanSnapshotStoring)? = nil,
         settingsStore: (any UserSettingsStoring)? = nil,
+        checkpointStore: (any ScanCheckpointStoring)? = nil,
         previewService: any PreviewServicing = PreviewService(),
         permissionChecker: any FullDiskAccessChecking = SystemFullDiskAccessChecker(),
         notificationCenter: NotificationCenter = .default,
@@ -179,6 +198,7 @@ public final class CleanerWorkspaceStore {
         self.historyStore = historyStore
         self.snapshotStore = snapshotStore
         self.settingsStore = settingsStore
+        self.checkpointStore = checkpointStore
         self.previewService = previewService
         self.permissionChecker = permissionChecker
         self.pathExists = pathExists
@@ -188,6 +208,9 @@ public final class CleanerWorkspaceStore {
         self.permissionStatus = permissionChecker.checkStatus()
         self.activationObserver.observeApplicationActivation(on: notificationCenter) { [weak self] in
             self?.refreshPermissionStatus()
+        }
+        self.activationObserver.observeWillTerminate(on: notificationCenter) { [weak self] in
+            self?.handleApplicationWillTerminate()
         }
     }
 
@@ -439,6 +462,118 @@ public final class CleanerWorkspaceStore {
         isSnapshotBannerDismissed = true
     }
 
+    public func loadInitialCheckpoint() async {
+        guard let checkpointStore,
+              !didAttemptInitialCheckpointLoad,
+              !isScanning,
+              !isPaused else {
+            return
+        }
+        didAttemptInitialCheckpointLoad = true
+
+        let initialGeneration = activeScanID
+        let result = await Task.detached(priority: .utility) {
+            await checkpointStore.load()
+        }.value
+
+        guard !Task.isCancelled,
+              !isScanning,
+              !isPaused,
+              activeScanID == initialGeneration else {
+            return
+        }
+
+        switch result {
+        case .loaded(let checkpoint, let savedAt, _, _):
+            pendingInterruptedCheckpoint = PendingInterruptedCheckpoint(checkpoint: checkpoint, savedAt: savedAt)
+        case .schemaMismatch(let found, _):
+            pendingInterruptedCheckpoint = nil
+            statusBannerMessage = "A previous incomplete scan couldn't be loaded because its saved format (v\(found)) is incompatible with this version. You can start a fresh scan."
+        case .expired, .corrupted, .none:
+            pendingInterruptedCheckpoint = nil
+        }
+    }
+
+    public var interruptedCheckpointPresentation: InterruptedCheckpointPresentation? {
+        guard !isScanning, !isPaused, let pending = pendingInterruptedCheckpoint else {
+            return nil
+        }
+        let relative = ScanCheckpointPolicy.relativeInterruptedDescription(
+            savedAt: pending.savedAt,
+            relativeTo: nowProvider()
+        )
+        let fileCount = pending.checkpoint.scannedFiles
+        let fileWord = fileCount == 1 ? "file" : "files"
+        let remainingCount = pending.checkpoint.pendingDirectories.count
+        let folderWord = remainingCount == 1 ? "folder" : "folders"
+        let bytesText = ByteFormatting.string(from: pending.checkpoint.bytesEvaluated)
+        let secondary = "\(fileCount) \(fileWord) evaluated (\(bytesText)) · \(remainingCount) \(folderWord) remaining"
+
+        return InterruptedCheckpointPresentation(
+            primaryText: "A scan was interrupted \(relative). Resume or start fresh?",
+            secondaryText: secondary
+        )
+    }
+
+    public func resumeInterruptedScan() async {
+        guard let pending = pendingInterruptedCheckpoint, !isScanning else { return }
+        let checkpoint = pending.checkpoint
+        pendingInterruptedCheckpoint = nil
+
+        let scanID = UUID()
+        activeScanID = scanID
+        activeScanConfiguration = checkpoint.configuration
+        resetWorkspaceForScanStart()
+        isScanning = true
+        isPaused = false
+        progress = ScanProgress(
+            phase: .enumerating,
+            currentPath: checkpoint.pendingDirectories.first?.path ?? "Resuming scan…",
+            scannedFiles: checkpoint.scannedFiles,
+            bytesEvaluated: checkpoint.bytesEvaluated,
+            pendingDirectoriesCount: checkpoint.pendingDirectories.count,
+            skippedProtectedDirectories: checkpoint.skippedProtectedDirectories,
+            startedAt: checkpoint.startedAt
+        )
+
+        await attachProgressStream(for: scanID)
+        guard activeScanID == scanID else { return }
+
+        let outcome = await scanner.resume(from: checkpoint)
+        await applyCompletedOutcome(outcome, configuration: checkpoint.configuration, for: scanID)
+    }
+
+    public func startFreshFromInterruptedCheckpoint() async {
+        pendingInterruptedCheckpoint = nil
+        if let checkpointStore {
+            await Task.detached(priority: .utility) {
+                await checkpointStore.clear()
+            }.value
+        }
+        await startScan()
+    }
+
+    public func discardInterruptedCheckpoint() async {
+        pendingInterruptedCheckpoint = nil
+        if let checkpointStore {
+            await Task.detached(priority: .utility) {
+                await checkpointStore.clear()
+            }.value
+        }
+    }
+
+    private func handleApplicationWillTerminate() {
+        guard let checkpointStore else { return }
+        if isPaused, let checkpoint = savedCheckpoint {
+            try? checkpointStore.saveSynchronously(checkpoint)
+            return
+        }
+        guard isScanning else { return }
+        if let checkpoint = scanner.captureCheckpointSynchronously() {
+            try? checkpointStore.saveSynchronously(checkpoint)
+        }
+    }
+
     public func refreshVolumeStorage() async {
         let expectedRoot = configuration.roots.first ?? FileManager.default.homeDirectoryForCurrentUser
         let snapshot = await scanner.volumeStorageSnapshot(for: expectedRoot)
@@ -566,6 +701,27 @@ public final class CleanerWorkspaceStore {
         activeScanID = scanID
         let scanConfig = configuration
         activeScanConfiguration = scanConfig
+        pendingInterruptedCheckpoint = nil
+        resetWorkspaceForScanStart()
+        isScanning = true
+        isPaused = false
+        progress = ScanProgress(phase: .enumerating, currentPath: "Preparing scan…")
+
+        if let checkpointStore {
+            await Task.detached(priority: .utility) {
+                await checkpointStore.clear()
+            }.value
+            guard activeScanID == scanID else { return }
+        }
+
+        await attachProgressStream(for: scanID)
+        guard activeScanID == scanID else { return }
+
+        let outcome = await scanner.runFullScan(configuration: scanConfig)
+        await applyCompletedOutcome(outcome, configuration: scanConfig, for: scanID)
+    }
+
+    private func resetWorkspaceForScanStart() {
         cancellationBag.cancel("stream")
         cancellationBag.cancel("preview")
 
@@ -584,10 +740,9 @@ public final class CleanerWorkspaceStore {
         lastCompletedStartedAt = nil
         lastCompletedFinishedAt = nil
         lastCompletedProgress = nil
-        isScanning = true
-        isPaused = false
-        progress = ScanProgress(phase: .enumerating, currentPath: "Preparing scan…")
+    }
 
+    private func attachProgressStream(for scanID: UUID) async {
         let stream = await scanner.makeProgressStream()
         guard activeScanID == scanID else { return }
 
@@ -607,9 +762,6 @@ public final class CleanerWorkspaceStore {
             }
         }
         cancellationBag.replace("stream", with: streamTask)
-
-        let outcome = await scanner.runFullScan(configuration: scanConfig)
-        await applyCompletedOutcome(outcome, configuration: scanConfig, for: scanID)
     }
 
     public func pauseScan() async {
@@ -620,6 +772,16 @@ public final class CleanerWorkspaceStore {
         savedCheckpoint = checkpoint
         isPaused = true
         progress.phase = .paused
+        if let checkpointStore {
+            await Task.detached(priority: .utility) {
+                try? await checkpointStore.save(checkpoint)
+            }.value
+            if activeScanID != scanID || !isPaused {
+                await Task.detached(priority: .utility) {
+                    await checkpointStore.clear()
+                }.value
+            }
+        }
     }
 
     public func resumeScan() async {
@@ -636,8 +798,14 @@ public final class CleanerWorkspaceStore {
         let scanID = UUID()
         activeScanID = scanID
         activeScanConfiguration = nil
+        pendingInterruptedCheckpoint = nil
         cancellationBag.cancel("stream")
         let outcome = await scanner.cancel()
+        if let checkpointStore {
+            await Task.detached(priority: .utility) {
+                await checkpointStore.clear()
+            }.value
+        }
         guard activeScanID == scanID else { return }
         isScanning = false
         isPaused = false
@@ -815,6 +983,11 @@ public final class CleanerWorkspaceStore {
         savedCheckpoint = nil
         activeScanConfiguration = nil
         progress = outcome.progress
+        if let checkpointStore {
+            await Task.detached(priority: .utility) {
+                await checkpointStore.clear()
+            }.value
+        }
         if !outcome.wasCancelled {
             for category in ScanCategory.allCases {
                 if runConfiguration.categories.contains(category) {
