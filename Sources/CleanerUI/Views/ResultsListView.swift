@@ -84,6 +84,24 @@ public struct ResultsListView: View {
             .controlSize(.small)
             .disabled(store.selection.checkedIDs.isEmpty)
 
+            if store.isResultsFromPersistedSnapshot {
+                let hasAnySnapshotItems = ScanCategory.allCases.contains { !store.items(for: $0).isEmpty }
+                Button {
+                    Task { await store.reverifyLoadedSnapshot() }
+                } label: {
+                    Label(
+                        store.isReverifyingSnapshot ? "Re-verifying…" : "Re-verify",
+                        systemImage: "checkmark.shield"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isReverifyingSnapshot || !hasAnySnapshotItems)
+                .help("Re-verify every snapshot item against disk using lstat")
+                .accessibilityLabel("Re-verify")
+                .accessibilityIdentifier("reverifySnapshotButton")
+            }
+
             Spacer()
 
             if !store.checkedItemsInAllCategories.isEmpty {
@@ -185,6 +203,7 @@ public struct ResultsListView: View {
             item: item,
             isHighlighted: store.selection.highlightedIDs.contains(item.id),
             isChecked: store.selection.checkedIDs.contains(item.id),
+            verificationStatus: store.verificationStatus(for: item),
             onToggleCheck: {
                 store.toggleCheck(for: item)
             },

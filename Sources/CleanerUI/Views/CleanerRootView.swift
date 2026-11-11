@@ -21,6 +21,7 @@ public struct CleanerRootView: View {
                 payload: store.previewPayload,
                 isLoading: store.isLoadingPreview,
                 isChecked: store.focusedItem.map { store.selection.checkedIDs.contains($0.id) } ?? false,
+                verificationStatus: store.focusedItem.flatMap { store.verificationStatus(for: $0) },
                 onToggleCheck: {
                     if let item = store.focusedItem {
                         store.toggleCheck(for: item)
@@ -289,6 +290,8 @@ public struct CleanerRootView: View {
         let symbolName: String
         let actionTitle: String?
         let onAction: (() -> Void)?
+        let secondaryActionTitle: String?
+        let onSecondaryAction: (() -> Void)?
 
         switch presentation.staleness {
         case .fresh:
@@ -296,16 +299,22 @@ public struct CleanerRootView: View {
             symbolName = "clock"
             actionTitle = nil
             onAction = nil
+            secondaryActionTitle = nil
+            onSecondaryAction = nil
         case .subtle:
             tone = .subtleStale
             symbolName = "clock.arrow.circlepath"
             actionTitle = "Scan Again"
             onAction = { Task { await store.startScan() } }
+            secondaryActionTitle = nil
+            onSecondaryAction = nil
         case .stale:
             tone = .prominentWarning
             symbolName = "exclamationmark.triangle.fill"
             actionTitle = "Scan Again"
             onAction = { Task { await store.startScan() } }
+            secondaryActionTitle = "Re-verify"
+            onSecondaryAction = { Task { await store.reverifyLoadedSnapshot() } }
         }
 
         return WorkspaceBannerBar(
@@ -318,6 +327,11 @@ public struct CleanerRootView: View {
             actionIdentifier: "snapshotBannerRescanButton",
             actionHelp: actionTitle != nil ? "Run a fresh scan before deleting files (Cmd+R)" : nil,
             onAction: onAction,
+            secondaryActionTitle: secondaryActionTitle,
+            secondaryActionAccessibilityLabel: secondaryActionTitle,
+            secondaryActionIdentifier: "snapshotBannerReverifyButton",
+            secondaryActionHelp: secondaryActionTitle != nil ? "Re-verify saved snapshot items against disk using lstat" : nil,
+            onSecondaryAction: onSecondaryAction,
             dismissAccessibilityLabel: "Dismiss last scan banner",
             accessibilityIdentifier: "snapshotStatusBanner",
             onDismiss: { store.dismissSnapshotBanner() }

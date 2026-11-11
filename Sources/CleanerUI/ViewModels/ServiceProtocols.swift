@@ -30,10 +30,19 @@ public protocol DeletionServicing: Sendable {
         mode: DeletionMode,
         dryRun: Bool,
         excludedFolders: [String],
-        allowAppBundles: Bool
+        allowAppBundles: Bool,
+        verifySnapshotItems: Bool
     ) async throws -> DeletionExecutionReport
 
+    func verifySnapshotItems(_ items: [ScannedItem]) async -> [UUID: SnapshotVerificationStatus]
+
     func restore(entries: [TrashHistoryEntry]) async -> (restoredIDs: Set<UUID>, failures: [DeletionFailure])
+}
+
+public extension DeletionServicing {
+    func verifySnapshotItems(_ items: [ScannedItem]) async -> [UUID: SnapshotVerificationStatus] {
+        [:]
+    }
 }
 
 public protocol HistoryStoring: Sendable {

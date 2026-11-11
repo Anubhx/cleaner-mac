@@ -130,6 +130,8 @@ public final class CleanerWorkspaceStore {
     public var isSnapshotBannerDismissed: Bool = false
     public private(set) var unavailableSnapshotRoots: [URL] = []
     public private(set) var unavailableSnapshotItems: [ScannedItem] = []
+    public private(set) var isReverifyingSnapshot: Bool = false
+    public private(set) var snapshotVerificationStatuses: [UUID: SnapshotVerificationStatus] = [:]
 
     public var selection: MultiSelectState = MultiSelectState()
     public var previewPayload: PreviewPayload?
@@ -389,6 +391,8 @@ public final class CleanerWorkspaceStore {
         loadedSnapshotFinishedAt = restored.finishedAt
         loadedSnapshotAge = max(0, nowProvider().timeIntervalSince(restored.finishedAt))
         isSnapshotBannerDismissed = false
+        snapshotVerificationStatuses = [:]
+        isReverifyingSnapshot = false
         lastCompletedSnapshotConfiguration = restored.configuration
         lastCompletedStartedAt = restored.startedAt
         lastCompletedFinishedAt = restored.finishedAt
@@ -460,6 +464,66 @@ public final class CleanerWorkspaceStore {
 
     public func dismissSnapshotBanner() {
         isSnapshotBannerDismissed = true
+    }
+
+    public var isResultsFromPersistedSnapshot: Bool {
+        loadedSnapshotFinishedAt != nil && !isScanning
+    }
+
+    public func verificationStatus(for item: ScannedItem) -> SnapshotVerificationStatus? {
+        snapshotVerificationStatuses[item.id]
+    }
+
+    public func reverifyLoadedSnapshot() async {
+        guard isResultsFromPersistedSnapshot, !isReverifyingSnapshot else { return }
+        let itemsToVerify = collectAllCurrentResultItems()
+        guard !itemsToVerify.isEmpty else { return }
+
+        let expectedGeneration = activeScanID
+        isReverifyingSnapshot = true
+        defer {
+            if activeScanID == expectedGeneration {
+                isReverifyingSnapshot = false
+            }
+        }
+
+        let statuses = await deleter.verifySnapshotItems(itemsToVerify)
+        guard !Task.isCancelled, activeScanID == expectedGeneration else { return }
+
+        snapshotVerificationStatuses = statuses
+        let invalidIDs = Set(statuses.compactMap { id, status in
+            status == .unchanged ? nil : id
+        })
+        selection.uncheck(ids: invalidIDs)
+    }
+
+    private func collectAllCurrentResultItems() -> [ScannedItem] {
+        var seenIDs = Set<UUID>()
+        var collected: [ScannedItem] = []
+        for category in ScanCategory.allCases {
+            for item in items(for: category) where seenIDs.insert(item.id).inserted {
+                collected.append(item)
+            }
+        }
+        for group in duplicateGroups {
+            for item in group.allItems where seenIDs.insert(item.id).inserted {
+                collected.append(item)
+            }
+        }
+        return collected
+    }
+
+    private func applyVerificationStatusesByURL(_ statusByURL: [URL: SnapshotVerificationStatus]) {
+        guard !statusByURL.isEmpty else { return }
+        var idsToUncheck = Set<UUID>()
+        for item in collectAllCurrentResultItems() {
+            guard let status = statusByURL[item.url.standardizedFileURL] else { continue }
+            snapshotVerificationStatuses[item.id] = status
+            if status != .unchanged {
+                idsToUncheck.insert(item.id)
+            }
+        }
+        selection.uncheck(ids: idsToUncheck)
     }
 
     public func loadInitialCheckpoint() async {
@@ -736,6 +800,8 @@ public final class CleanerWorkspaceStore {
         isSnapshotBannerDismissed = false
         unavailableSnapshotRoots = []
         unavailableSnapshotItems = []
+        isReverifyingSnapshot = false
+        snapshotVerificationStatuses = [:]
         lastCompletedSnapshotConfiguration = nil
         lastCompletedStartedAt = nil
         lastCompletedFinishedAt = nil
@@ -935,9 +1001,21 @@ public final class CleanerWorkspaceStore {
                 mode: mode,
                 dryRun: isDryRunEnabled,
                 excludedFolders: configuration.excludedFolders,
-                allowAppBundles: configuration.allowAppBundles
+                allowAppBundles: configuration.allowAppBundles,
+                verifySnapshotItems: isResultsFromPersistedSnapshot
             )
             lastExecutionReport = report
+
+            let blockedVerificationByURL = Dictionary(
+                report.blockedItems.compactMap { blocked -> (URL, SnapshotVerificationStatus)? in
+                    guard let status = blocked.verificationStatus else { return nil }
+                    return (blocked.url.standardizedFileURL, status)
+                },
+                uniquingKeysWith: { _, latest in latest }
+            )
+            if !blockedVerificationByURL.isEmpty {
+                applyVerificationStatusesByURL(blockedVerificationByURL)
+            }
 
             if !report.isDryRun {
                 let removedURLs = Set(report.succeededItems.map(\.url))
@@ -1098,6 +1176,7 @@ public final class CleanerWorkspaceStore {
         }
         let validIDs = Set(ScanCategory.allCases.flatMap { items(for: $0).map(\.id) })
         selection.pruneRemoved(validIDs: validIDs)
+        snapshotVerificationStatuses = snapshotVerificationStatuses.filter { validIDs.contains($0.key) }
         refreshPreviewForFocus()
     }
 }

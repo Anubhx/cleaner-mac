@@ -93,6 +93,63 @@ public struct KeepOriginalBadge: View {
     }
 }
 
+public struct SnapshotVerificationBadge: View {
+    let status: SnapshotVerificationStatus
+
+    public init(status: SnapshotVerificationStatus) {
+        self.status = status
+    }
+
+    public var body: some View {
+        Label(status.displayLabel, systemImage: status.symbolName)
+            .font(CleanerTypography.caption)
+            .fontWeight(.medium)
+            .foregroundStyle(tint)
+            .padding(.horizontal, CleanerSpacing.xs)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: CleanerRadii.xs))
+            .help(status.helpText)
+            .accessibilityLabel("Verification status: \(status.displayLabel)")
+    }
+
+    private var tint: Color {
+        switch status {
+        case .unchanged:
+            CleanerColors.safe
+        case .modified:
+            CleanerColors.caution
+        case .missing:
+            Color.secondary
+        case .replaced:
+            CleanerColors.danger
+        }
+    }
+}
+
+private extension SnapshotVerificationStatus {
+    var symbolName: String {
+        switch self {
+        case .unchanged: "checkmark.shield"
+        case .modified: "exclamationmark.circle"
+        case .missing: "questionmark.folder"
+        case .replaced: "exclamationmark.triangle.fill"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .unchanged:
+            "Verified on disk: matches the saved snapshot."
+        case .modified:
+            SnapshotVerificationPolicy.staleSnapshotBlockedReason
+        case .missing:
+            SnapshotVerificationPolicy.missingFileBlockedReason
+        case .replaced:
+            SnapshotVerificationPolicy.staleSnapshotBlockedReason
+        }
+    }
+}
+
 public struct DryRunRibbon: View {
     public init() {}
 

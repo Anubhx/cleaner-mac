@@ -10,6 +10,7 @@ public struct PreviewPaneView: View {
     let payload: PreviewPayload?
     let isLoading: Bool
     let isChecked: Bool
+    let verificationStatus: SnapshotVerificationStatus?
     let onToggleCheck: () -> Void
     let onTrashFocused: () -> Void
     let onPermanentDeleteFocused: () -> Void
@@ -19,6 +20,7 @@ public struct PreviewPaneView: View {
         payload: PreviewPayload?,
         isLoading: Bool,
         isChecked: Bool,
+        verificationStatus: SnapshotVerificationStatus? = nil,
         onToggleCheck: @escaping () -> Void,
         onTrashFocused: @escaping () -> Void,
         onPermanentDeleteFocused: @escaping () -> Void
@@ -27,6 +29,7 @@ public struct PreviewPaneView: View {
         self.payload = payload
         self.isLoading = isLoading
         self.isChecked = isChecked
+        self.verificationStatus = verificationStatus
         self.onToggleCheck = onToggleCheck
         self.onTrashFocused = onTrashFocused
         self.onPermanentDeleteFocused = onPermanentDeleteFocused
@@ -216,12 +219,22 @@ public struct PreviewPaneView: View {
     @ViewBuilder
     private func safetySection(item: ScannedItem) -> some View {
         VStack(alignment: .leading, spacing: CleanerSpacing.xs) {
-            HStack {
+            HStack(spacing: CleanerSpacing.xs) {
                 RiskBadge(risk: item.risk)
+                if let verificationStatus {
+                    SnapshotVerificationBadge(status: verificationStatus)
+                }
                 Spacer()
                 if item.isRecommendedKeep {
                     KeepOriginalBadge()
                 }
+            }
+            if let verificationStatus, verificationStatus != .unchanged,
+               let blockedReason = SnapshotVerificationPolicy.blockedReason(for: verificationStatus) {
+                Text(blockedReason)
+                    .font(CleanerTypography.caption)
+                    .foregroundStyle(CleanerColors.caution)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(item.risk.reason)
                 .font(CleanerTypography.body)

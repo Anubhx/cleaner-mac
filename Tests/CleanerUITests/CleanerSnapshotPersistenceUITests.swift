@@ -534,7 +534,8 @@ private actor NoOpDeletionService: DeletionServicing {
         mode: DeletionMode,
         dryRun: Bool,
         excludedFolders: [String],
-        allowAppBundles: Bool
+        allowAppBundles: Bool,
+        verifySnapshotItems: Bool
     ) async throws -> DeletionExecutionReport {
         DeletionExecutionReport(isDryRun: dryRun, mode: mode, succeededItems: items, reclaimedBytes: 0)
     }

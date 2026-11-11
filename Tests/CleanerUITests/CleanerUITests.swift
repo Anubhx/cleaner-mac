@@ -1775,7 +1775,8 @@ private actor FakeDeletionService: DeletionServicing {
         mode: DeletionMode,
         dryRun: Bool,
         excludedFolders: [String],
-        allowAppBundles: Bool
+        allowAppBundles: Bool,
+        verifySnapshotItems: Bool
     ) async throws -> DeletionExecutionReport {
         let entries = dryRun ? [] : items.map {
             TrashHistoryEntry(
@@ -1813,7 +1814,8 @@ private actor StrictDeletionService: DeletionServicing {
         mode: DeletionMode,
         dryRun: Bool,
         excludedFolders: [String],
-        allowAppBundles: Bool
+        allowAppBundles: Bool,
+        verifySnapshotItems: Bool
     ) async throws -> DeletionExecutionReport {
         if case .permanentDelete(let confirmed) = mode, !confirmed {
             throw DeletionPlanError.permanentConfirmationRequired

@@ -439,7 +439,7 @@ private actor NoOpScanner: ScanningServicing {
 }
 
 private actor NoOpDeleter: DeletionServicing {
-    func execute(items: [ScannedItem], mode: DeletionMode, dryRun: Bool, excludedFolders: [String], allowAppBundles: Bool) async throws -> DeletionExecutionReport {
+    func execute(items: [ScannedItem], mode: DeletionMode, dryRun: Bool, excludedFolders: [String], allowAppBundles: Bool, verifySnapshotItems: Bool) async throws -> DeletionExecutionReport {
         DeletionExecutionReport(isDryRun: dryRun, mode: mode, succeededItems: [], reclaimedBytes: 0)
     }
     func restore(entries: [TrashHistoryEntry]) async -> (restoredIDs: Set<UUID>, failures: [DeletionFailure]) { ([], []) }
