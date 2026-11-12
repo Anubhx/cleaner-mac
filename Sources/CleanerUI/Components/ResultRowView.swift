@@ -68,16 +68,22 @@ public struct ResultRowView: View {
                         Text("· Keep Original")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(CleanerColors.safe)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     } else if let deadKind = item.deadKind {
                         Text("· \(deadKind.displayLabel)")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
 
                     if let modified = item.modifiedDate {
                         Text("· Modified \(modified.formatted(date: .abbreviated, time: .omitted))")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
             }
@@ -86,11 +92,14 @@ public struct ResultRowView: View {
 
             if let verificationStatus {
                 SnapshotVerificationBadge(status: verificationStatus)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             Text(ByteFormatting.string(from: item.reclaimableDiskBytes))
                 .font(CleanerTypography.monoMetric)
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, CleanerSpacing.sm)
         .padding(.vertical, CleanerSpacing.xs)

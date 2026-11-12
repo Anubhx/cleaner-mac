@@ -48,7 +48,7 @@ public struct ScanSettingsView: View {
                 safetyPolicyCard
                 storedDataCard
             }
-            .padding(CleanerSpacing.lg)
+            .padding(CleanerSpacing.md)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -108,7 +108,7 @@ public struct ScanSettingsView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: CleanerSpacing.xs) {
+            WrappingFlowLayout(horizontalSpacing: CleanerSpacing.xs, verticalSpacing: CleanerSpacing.xs) {
                 if isGranted {
                     Button {
                         store.openFullDiskAccessSettings()
@@ -117,6 +117,7 @@ public struct ScanSettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
                     .accessibilityIdentifier("settingsOpenFullDiskAccessButton")
                     .help("Open Privacy & Security > Full Disk Access in System Settings")
                 } else {
@@ -127,6 +128,7 @@ public struct ScanSettingsView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
                     .accessibilityIdentifier("settingsOpenFullDiskAccessButton")
                     .help("Open Privacy & Security > Full Disk Access in System Settings")
                 }
@@ -136,10 +138,13 @@ public struct ScanSettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
                 .accessibilityIdentifier("settingsCheckPermissionButton")
                 .help("Re-check Full Disk Access status")
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CleanerSpacing.md)
         .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
         .overlay(
@@ -157,7 +162,7 @@ public struct ScanSettingsView: View {
         onRemove: @escaping (String) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: CleanerSpacing.sm) {
-            HStack {
+            AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(CleanerTypography.headline)
                     Text(subtitle)
@@ -165,12 +170,12 @@ public struct ScanSettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
                 Button(action: onAdd) {
                     Label("Add Folder…", systemImage: "folder.badge.plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
             }
 
             if paths.isEmpty {
@@ -214,10 +219,7 @@ public struct ScanSettingsView: View {
             Text("Analysis Thresholds")
                 .font(CleanerTypography.headline)
 
-            HStack {
-                Text("Large File Minimum")
-                    .font(CleanerTypography.body)
-                Spacer()
+            thresholdRow(label: "Large File Minimum") {
                 Stepper(
                     value: largeFileMBBinding,
                     in: 10...10_240,
@@ -225,13 +227,12 @@ public struct ScanSettingsView: View {
                 ) {
                     Text("\(largeFileMBBinding.wrappedValue) MB")
                         .font(CleanerTypography.monoMetric)
+                        .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
 
-            HStack {
-                Text("Duplicate Minimum")
-                    .font(CleanerTypography.body)
-                Spacer()
+            thresholdRow(label: "Duplicate Minimum") {
                 Stepper(
                     value: minDuplicateKBBinding,
                     in: 64...51_200,
@@ -239,13 +240,12 @@ public struct ScanSettingsView: View {
                 ) {
                     Text("\(minDuplicateKBBinding.wrappedValue) KB")
                         .font(CleanerTypography.monoMetric)
+                        .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
 
-            HStack {
-                Text("Old File Age Threshold")
-                    .font(CleanerTypography.body)
-                Spacer()
+            thresholdRow(label: "Old File Age Threshold") {
                 Stepper(
                     value: $store.configuration.oldFileThresholdDays,
                     in: 7...1_825,
@@ -253,28 +253,44 @@ public struct ScanSettingsView: View {
                 ) {
                     Text("\(store.configuration.oldFileThresholdDays) days")
                         .font(CleanerTypography.monoMetric)
+                        .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
 
-            HStack {
+            AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
                 Text("Age Basis")
                     .font(CleanerTypography.body)
-                Spacer()
+                    .lineLimit(1)
                 Picker("Age Basis", selection: $store.configuration.ageBasis) {
                     ForEach(AgeBasis.allCases, id: \.self) { basis in
                         Text(basis.displayName).tag(basis)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 240)
+                .frame(minWidth: 160, idealWidth: 220, maxWidth: 240)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CleanerSpacing.md)
         .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
         .overlay(
             RoundedRectangle(cornerRadius: CleanerRadii.md)
                 .stroke(CleanerColors.hairline, lineWidth: 1)
         )
+    }
+
+    private func thresholdRow<Control: View>(
+        label: String,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xxs, stackedTrailingAlignment: .leading) {
+            Text(label)
+                .font(CleanerTypography.body)
+                .lineLimit(1)
+            control()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var categoriesCard: some View {
@@ -366,50 +382,27 @@ public struct ScanSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(alignment: .center, spacing: CleanerSpacing.sm) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Stored Scan Data")
-                        .font(CleanerTypography.body)
-                    Text("Deletes session/last-scan.json and session/checkpoint.json while keeping settings.json and Trash history.")
-                        .font(CleanerTypography.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: CleanerSpacing.sm)
-
-                Button("Clear Stored Scan Data…", role: .destructive) {
-                    store.requestClearStoredScanData()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(store.isScanning)
-                .accessibilityIdentifier("settingsClearStoredScanDataButton")
-                .help("Delete stored scan snapshot and checkpoint from disk")
-            }
+            storedActionRow(
+                title: "Stored Scan Data",
+                subtitle: "Deletes session/last-scan.json and session/checkpoint.json while keeping settings.json and Trash history.",
+                buttonTitle: "Clear Stored Scan Data…",
+                accessibilityIdentifier: "settingsClearStoredScanDataButton",
+                helpText: "Delete stored scan snapshot and checkpoint from disk",
+                isDisabled: store.isScanning,
+                action: { store.requestClearStoredScanData() }
+            )
 
             Divider()
 
-            HStack(alignment: .center, spacing: CleanerSpacing.sm) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Settings & Preferences")
-                        .font(CleanerTypography.body)
-                    Text("Deletes settings.json and restores default folders, thresholds, categories, and view options.")
-                        .font(CleanerTypography.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: CleanerSpacing.sm)
-
-                Button("Reset Settings to Defaults…", role: .destructive) {
-                    store.requestResetSettings()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityIdentifier("settingsResetDefaultsButton")
-                .help("Reset configuration and UI preferences to defaults")
-            }
+            storedActionRow(
+                title: "Settings & Preferences",
+                subtitle: "Deletes settings.json and restores default folders, thresholds, categories, and view options.",
+                buttonTitle: "Reset Settings to Defaults…",
+                accessibilityIdentifier: "settingsResetDefaultsButton",
+                helpText: "Reset configuration and UI preferences to defaults",
+                isDisabled: false,
+                action: { store.requestResetSettings() }
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(CleanerSpacing.md)
@@ -419,6 +412,36 @@ public struct ScanSettingsView: View {
                 .stroke(CleanerColors.hairline, lineWidth: 1)
         )
         .accessibilityIdentifier("settingsStoredDataCard")
+    }
+
+    private func storedActionRow(
+        title: String,
+        subtitle: String,
+        buttonTitle: String,
+        accessibilityIdentifier: String,
+        helpText: String,
+        isDisabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(CleanerTypography.body)
+                Text(subtitle)
+                    .font(CleanerTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button(buttonTitle, role: .destructive, action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .disabled(isDisabled)
+                .accessibilityIdentifier(accessibilityIdentifier)
+                .help(helpText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func categoryBinding(for category: ScanCategory) -> Binding<Bool> {

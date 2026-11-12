@@ -89,3 +89,194 @@ public enum CleanerMotion {
         reduceMotion ? .linear(duration: 0.01) : .easeInOut(duration: 0.18)
     }
 }
+
+public struct WrappingFlowLayout: Layout {
+    public var horizontalSpacing: CGFloat
+    public var verticalSpacing: CGFloat
+
+    public init(horizontalSpacing: CGFloat = CleanerSpacing.xs, verticalSpacing: CGFloat = CleanerSpacing.xs) {
+        self.horizontalSpacing = horizontalSpacing
+        self.verticalSpacing = verticalSpacing
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        let rows = arrangeRows(maxWidth: maxWidth, subviews: subviews)
+        let totalHeight = rows.reduce(CGFloat.zero) { partial, row in
+            partial + row.height
+        } + CGFloat(max(0, rows.count - 1)) * verticalSpacing
+        let totalWidth = proposal.width ?? rows.map(\.width).max() ?? 0
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = arrangeRows(maxWidth: bounds.width, subviews: subviews)
+        var y = bounds.minY
+        for row in rows {
+            var x = bounds.minX
+            for item in row.items {
+                let yOffset = y + (row.height - item.size.height) / 2
+                item.subview.place(
+                    at: CGPoint(x: x, y: yOffset),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(item.size)
+                )
+                x += item.size.width + horizontalSpacing
+            }
+            y += row.height + verticalSpacing
+        }
+    }
+
+    private struct RowItem {
+        let subview: LayoutSubview
+        let size: CGSize
+    }
+
+    private struct Row {
+        var items: [RowItem] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrangeRows(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var current = Row()
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let neededWidth = current.items.isEmpty ? size.width : current.width + horizontalSpacing + size.width
+            if !current.items.isEmpty && neededWidth > maxWidth {
+                rows.append(current)
+                current = Row(
+                    items: [RowItem(subview: subview, size: size)],
+                    width: size.width,
+                    height: size.height
+                )
+            } else {
+                current.items.append(RowItem(subview: subview, size: size))
+                current.width = neededWidth
+                current.height = max(current.height, size.height)
+            }
+        }
+
+        if !current.items.isEmpty {
+            rows.append(current)
+        }
+        return rows
+    }
+}
+
+public struct AdaptiveRowLayout: Layout {
+    public var horizontalSpacing: CGFloat
+    public var verticalSpacing: CGFloat
+    public var stackedTrailingAlignment: HorizontalAlignment
+
+    public init(
+        horizontalSpacing: CGFloat = CleanerSpacing.sm,
+        verticalSpacing: CGFloat = CleanerSpacing.xs,
+        stackedTrailingAlignment: HorizontalAlignment = .trailing
+    ) {
+        self.horizontalSpacing = horizontalSpacing
+        self.verticalSpacing = verticalSpacing
+        self.stackedTrailingAlignment = stackedTrailingAlignment
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        if subviews.count == 1 {
+            return subviews[0].sizeThatFits(proposal)
+        }
+
+        let leading = subviews[0]
+        let trailing = subviews[1]
+        let trailingIdeal = trailing.sizeThatFits(.unspecified)
+
+        guard let availableWidth = proposal.width else {
+            let leadingIdeal = leading.sizeThatFits(.unspecified)
+            return CGSize(
+                width: leadingIdeal.width + horizontalSpacing + trailingIdeal.width,
+                height: max(leadingIdeal.height, trailingIdeal.height)
+            )
+        }
+
+        if availableWidth.isFinite {
+            let leadingIdeal = leading.sizeThatFits(.unspecified)
+            if leadingIdeal.width + horizontalSpacing + trailingIdeal.width <= availableWidth {
+                let leadingWidth = max(0, availableWidth - horizontalSpacing - trailingIdeal.width)
+                let leadingSize = leading.sizeThatFits(ProposedViewSize(width: leadingWidth, height: nil))
+                return CGSize(
+                    width: availableWidth,
+                    height: max(leadingSize.height, trailingIdeal.height)
+                )
+            } else {
+                let leadingSize = leading.sizeThatFits(ProposedViewSize(width: availableWidth, height: nil))
+                let trailingSize = trailing.sizeThatFits(ProposedViewSize(width: availableWidth, height: nil))
+                let width = max(availableWidth, max(leadingSize.width, trailingSize.width))
+                return CGSize(
+                    width: width,
+                    height: leadingSize.height + verticalSpacing + trailingSize.height
+                )
+            }
+        } else {
+            let leadingIdeal = leading.sizeThatFits(.unspecified)
+            return CGSize(
+                width: leadingIdeal.width + horizontalSpacing + trailingIdeal.width,
+                height: max(leadingIdeal.height, trailingIdeal.height)
+            )
+        }
+    }
+
+    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        if subviews.count == 1 {
+            subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: proposal)
+            return
+        }
+
+        let leading = subviews[0]
+        let trailing = subviews[1]
+        let leadingIdeal = leading.sizeThatFits(.unspecified)
+        let trailingIdeal = trailing.sizeThatFits(.unspecified)
+
+        if leadingIdeal.width + horizontalSpacing + trailingIdeal.width <= bounds.width {
+            let leadingWidth = max(0, bounds.width - horizontalSpacing - trailingIdeal.width)
+            let leadingSize = leading.sizeThatFits(ProposedViewSize(width: leadingWidth, height: nil))
+            let rowHeight = max(leadingSize.height, trailingIdeal.height)
+
+            leading.place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + (rowHeight - leadingSize.height) / 2),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: leadingWidth, height: leadingSize.height)
+            )
+            trailing.place(
+                at: CGPoint(x: bounds.maxX, y: bounds.minY + (rowHeight - trailingIdeal.height) / 2),
+                anchor: .topTrailing,
+                proposal: ProposedViewSize(trailingIdeal)
+            )
+        } else {
+            let leadingSize = leading.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            let trailingSize = trailing.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+
+            leading.place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: leadingSize.height)
+            )
+
+            let trailingY = bounds.minY + leadingSize.height + verticalSpacing
+            if stackedTrailingAlignment == .leading {
+                trailing.place(
+                    at: CGPoint(x: bounds.minX, y: trailingY),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: bounds.width, height: trailingSize.height)
+                )
+            } else {
+                trailing.place(
+                    at: CGPoint(x: bounds.maxX, y: trailingY),
+                    anchor: .topTrailing,
+                    proposal: ProposedViewSize(width: min(bounds.width, trailingSize.width), height: trailingSize.height)
+                )
+            }
+        }
+    }
+}

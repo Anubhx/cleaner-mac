@@ -371,62 +371,21 @@ public struct WorkspaceBannerBar: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: CleanerSpacing.sm) {
-                Image(systemName: symbolName)
-                    .font(tone == .prominentWarning ? .title3 : .body)
-                    .foregroundStyle(iconColor)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(primaryText)
-                        .font(tone == .prominentWarning ? CleanerTypography.headline : CleanerTypography.callout)
-                        .foregroundStyle(tone == .plainNote ? .secondary : .primary)
-                        .lineLimit(2)
-
-                    if let secondaryText, !secondaryText.isEmpty {
-                        Text(secondaryText)
-                            .font(CleanerTypography.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+            HStack(alignment: .top, spacing: CleanerSpacing.sm) {
+                if hasActionButtons {
+                    AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
+                        bannerTextBlock
+                        WrappingFlowLayout(horizontalSpacing: CleanerSpacing.xs, verticalSpacing: CleanerSpacing.xs) {
+                            bannerActionButtons
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    bannerTextBlock
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Spacer()
-
-                if let secondaryActionTitle, let onSecondaryAction {
-                    Button(secondaryActionTitle, action: onSecondaryAction)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .accessibilityLabel(secondaryActionAccessibilityLabel ?? secondaryActionTitle)
-                        .accessibilityIdentifier(secondaryActionIdentifier ?? "\(accessibilityIdentifier)SecondaryActionButton")
-                        .help(secondaryActionHelp ?? secondaryActionTitle)
-                }
-
-                if let actionTitle, let onAction {
-                    if tone == .prominentWarning {
-                        Button(actionTitle, action: onAction)
-                            .buttonStyle(.borderedProminent)
-                            .tint(CleanerColors.caution)
-                            .controlSize(.small)
-                            .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
-                            .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
-                            .help(actionHelp ?? actionTitle)
-                    } else {
-                        Button(actionTitle, action: onAction)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
-                            .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
-                            .help(actionHelp ?? actionTitle)
-                    }
-                }
-
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(dismissAccessibilityLabel)
-                .help("Dismiss banner")
+                bannerDismissButton
             }
             .padding(.horizontal, CleanerSpacing.md)
             .padding(.vertical, tone == .prominentWarning ? CleanerSpacing.sm : CleanerSpacing.xs)
@@ -449,6 +408,77 @@ public struct WorkspaceBannerBar: View {
                 Divider()
             }
         }
+    }
+
+    private var hasActionButtons: Bool {
+        (secondaryActionTitle != nil && onSecondaryAction != nil)
+            || (actionTitle != nil && onAction != nil)
+    }
+
+    private var bannerTextBlock: some View {
+        HStack(spacing: CleanerSpacing.sm) {
+            Image(systemName: symbolName)
+                .font(tone == .prominentWarning ? .title3 : .body)
+                .foregroundStyle(iconColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(primaryText)
+                    .font(tone == .prominentWarning ? CleanerTypography.headline : CleanerTypography.callout)
+                    .foregroundStyle(tone == .plainNote ? .secondary : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let secondaryText, !secondaryText.isEmpty {
+                    Text(secondaryText)
+                        .font(CleanerTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bannerActionButtons: some View {
+        if let secondaryActionTitle, let onSecondaryAction {
+            Button(secondaryActionTitle, action: onSecondaryAction)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel(secondaryActionAccessibilityLabel ?? secondaryActionTitle)
+                .accessibilityIdentifier(secondaryActionIdentifier ?? "\(accessibilityIdentifier)SecondaryActionButton")
+                .help(secondaryActionHelp ?? secondaryActionTitle)
+        }
+
+        if let actionTitle, let onAction {
+            if tone == .prominentWarning {
+                Button(actionTitle, action: onAction)
+                    .buttonStyle(.borderedProminent)
+                    .tint(CleanerColors.caution)
+                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                    .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
+                    .help(actionHelp ?? actionTitle)
+            } else {
+                Button(actionTitle, action: onAction)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                    .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
+                    .help(actionHelp ?? actionTitle)
+            }
+        }
+    }
+
+    private var bannerDismissButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(dismissAccessibilityLabel)
+        .help("Dismiss banner")
     }
 
     private var iconColor: Color {

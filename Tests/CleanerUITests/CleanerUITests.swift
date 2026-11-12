@@ -1526,6 +1526,191 @@ struct CleanerUITests {
         return nil
     }
 
+    @Test("Compact and default window sizes keep sidebar headers, action bar controls, banners, and inspector within bounds")
+    @MainActor
+    func compactAndDefaultLayoutsKeepControlsWithinWindowBounds() async {
+        InstrumentSerifFontRegistrar.registerBundledFonts()
+        let rootDir = FileManager.default.temporaryDirectory
+        let keepOriginal = ScannedItem(
+            url: rootDir.appendingPathComponent("master-archive.png"),
+            name: "master-archive.png",
+            logicalSize: 30_400_000,
+            allocatedSize: 30_400_000,
+            isDirectory: false,
+            category: .duplicates,
+            isRecommendedKeep: true
+        )
+        let dup1 = ScannedItem(
+            url: rootDir.appendingPathComponent("master-archive-copy-1.png"),
+            name: "master-archive-copy-1.png",
+            logicalSize: 30_400_000,
+            allocatedSize: 30_400_000,
+            isDirectory: false,
+            category: .duplicates,
+            isRecommendedKeep: false
+        )
+        let dup2 = ScannedItem(
+            url: rootDir.appendingPathComponent("master-archive-copy-2.png"),
+            name: "master-archive-copy-2.png",
+            logicalSize: 30_400_000,
+            allocatedSize: 30_400_000,
+            isDirectory: false,
+            category: .duplicates,
+            isRecommendedKeep: false
+        )
+        let group = DuplicateGroup(id: "hash-compact", original: keepOriginal, duplicates: [dup1, dup2])
+        let staleFinishedAt = Date().addingTimeInterval(-36 * 3_600)
+        let snapshot = ScanSnapshot(
+            startedAt: staleFinishedAt.addingTimeInterval(-30),
+            finishedAt: staleFinishedAt,
+            duration: 30,
+            appVersion: "2.0.0",
+            configuration: ScanConfiguration(roots: [rootDir]),
+            progress: ScanProgress(
+                phase: .completed,
+                currentPath: "",
+                scannedFiles: 300,
+                bytesEvaluated: 91_200_000,
+                pendingDirectoriesCount: 0,
+                skippedProtectedDirectories: 0,
+                startedAt: staleFinishedAt.addingTimeInterval(-30)
+            ),
+            categories: [
+                CategorySnapshot(category: .duplicates, items: group.allItems)
+            ],
+            duplicateGroups: [group],
+            totalReclaimableBytes: group.reclaimableBytes
+        )
+        let snapshotService = InlineSnapshotStore(snapshot: snapshot)
+        let store = CleanerWorkspaceStore(
+            scanner: FakeScanningService(
+                outcome: ScanOutcome(
+                    itemsByCategory: [.duplicates: group.allItems],
+                    duplicateGroups: [group]
+                )
+            ),
+            deleter: FakeDeletionService(),
+            historyStore: FakeHistoryService(),
+            snapshotStore: snapshotService,
+            previewService: PreviewService(),
+            pathExists: { _ in true }
+        )
+        store.configuration = ScanConfiguration(roots: [rootDir])
+        await store.loadInitialSnapshot()
+        store.selectedSidebarDestination = .category(.duplicates)
+        store.selectAllInActiveCategory()
+        store.clickRow(dup1, modifiers: [])
+        store.volumeStorage = VolumeStorageSnapshot(
+            volumeName: "Macintosh HD",
+            totalBytes: 250_000_000_000,
+            availableBytes: 30_000_000_000
+        )
+        store.isInspectorVisible = false
+        for size in [NSSize(width: 760, height: 560), NSSize(width: 860, height: 560)] {
+            verifyLayoutForWindowSize(size, store: store, expectSidebarHeaders: true)
+        }
+
+        store.isInspectorVisible = true
+        verifyLayoutForWindowSize(NSSize(width: 860, height: 560), store: store, expectSidebarHeaders: false)
+
+        for size in [NSSize(width: 980, height: 640), NSSize(width: 1240, height: 780)] {
+            verifyLayoutForWindowSize(size, store: store, expectSidebarHeaders: true)
+        }
+
+        store.isInspectorVisible = false
+        store.selectedSidebarDestination = .history
+        verifyDestinationFitsWindowSize(NSSize(width: 760, height: 560), store: store, expectedText: "Restore History")
+
+        store.selectedSidebarDestination = .settings
+        verifyDestinationFitsWindowSize(NSSize(width: 760, height: 560), store: store, expectedText: "Scan & Safety Settings")
+    }
+
+    @MainActor
+    private func verifyLayoutForWindowSize(
+        _ size: NSSize,
+        store: CleanerWorkspaceStore,
+        expectSidebarHeaders: Bool
+    ) {
+        enableSwiftUIAccessibilityTree()
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: CleanerRootView(store: store))
+        window.setContentSize(size)
+        window.orderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.35))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        let reverifyButton = findButton(in: window, matchingIdentifier: "reverifySnapshotButton", fallbackText: "Re-verify")
+        #expect(reverifyButton != nil)
+        if let frame = reverifyButton?.frameInWindow {
+            #expect(frame.minX >= 0)
+            #expect(frame.maxX <= size.width + 1)
+            #expect(frame.height > 10)
+        }
+
+        let scanAgainButton = findButton(in: window, matchingIdentifier: "snapshotBannerRescanButton", fallbackText: "Scan Again")
+        #expect(scanAgainButton != nil)
+        if let frame = scanAgainButton?.frameInWindow {
+            #expect(frame.minX >= 0)
+            #expect(frame.maxX <= size.width + 1)
+        }
+
+        let bannerReverifyButton = findButton(in: window, matchingIdentifier: "snapshotBannerReverifyButton", fallbackText: "Re-verify")
+        #expect(bannerReverifyButton != nil)
+        if let frame = bannerReverifyButton?.frameInWindow {
+            #expect(frame.minX >= 0)
+            #expect(frame.maxX <= size.width + 1)
+        }
+
+        let trashButton = findButton(in: window, matchingIdentifier: "batchMoveToTrashButton", fallbackText: "Move 2 to Trash")
+        #expect(trashButton != nil)
+        if let frame = trashButton?.frameInWindow {
+            #expect(frame.minX >= 0)
+            #expect(frame.maxX <= size.width + 1)
+        }
+
+        if expectSidebarHeaders {
+            #expect(containsText("Scan Categories", in: window.contentView))
+            #expect(containsText("Reversibility & Rules", in: window.contentView))
+        }
+    }
+
+    @MainActor
+    private func verifyDestinationFitsWindowSize(
+        _ size: NSSize,
+        store: CleanerWorkspaceStore,
+        expectedText: String
+    ) {
+        enableSwiftUIAccessibilityTree()
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: CleanerRootView(store: store))
+        window.setContentSize(size)
+        window.orderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        #expect(containsText(expectedText, in: window.contentView))
+        #expect(containsText("Scan Categories", in: window.contentView))
+        if let fittingWidth = window.contentView?.fittingSize.width {
+            #expect(fittingWidth <= size.width + 1)
+        }
+    }
+
     @MainActor
     private func findScrollView(in rootView: NSView?) -> NSScrollView? {
         guard let rootView else { return nil }
@@ -1567,7 +1752,7 @@ struct CleanerUITests {
             guard visitedObjects.insert(oid).inserted else { return nil }
 
             if let button = node as? NSButton, !(button is NSPopUpButton) {
-                let idMatch = button.accessibilityIdentifier() == identifier || button.identifier?.rawValue == identifier
+                let idMatch = !identifier.isEmpty && (button.accessibilityIdentifier() == identifier || button.identifier?.rawValue == identifier)
                 let textMatch = button.title == fallbackText
                     || button.accessibilityTitle() == fallbackText
                     || button.accessibilityLabel() == fallbackText
@@ -1586,7 +1771,7 @@ struct CleanerUITests {
             let axIdentifier = node.accessibilityIdentifier?()
             let axTitle = node.accessibilityTitle?()
             let axLabel = node.accessibilityLabel?()
-            let idMatch = axIdentifier == identifier
+            let idMatch = !identifier.isEmpty && axIdentifier == identifier
             let textMatch = axTitle == fallbackText
                 || axLabel == fallbackText
                 || (axTitle?.contains(fallbackText) == true)
@@ -1996,4 +2181,19 @@ private actor OverlappingGenerationsFakeScanner: ScanningServicing {
     func cancel() async -> ScanOutcome {
         ScanOutcome(progress: ScanProgress(phase: .cancelled), wasCancelled: true)
     }
+}
+
+private actor InlineSnapshotStore: ScanSnapshotStoring {
+    let snapshot: ScanSnapshot?
+
+    init(snapshot: ScanSnapshot?) {
+        self.snapshot = snapshot
+    }
+
+    func load() async -> ScanSnapshot? {
+        snapshot
+    }
+
+    func save(_ snapshot: ScanSnapshot) throws {}
+    func clear() {}
 }

@@ -219,16 +219,16 @@ public struct PreviewPaneView: View {
     @ViewBuilder
     private func safetySection(item: ScannedItem) -> some View {
         VStack(alignment: .leading, spacing: CleanerSpacing.xs) {
-            HStack(spacing: CleanerSpacing.xs) {
+            WrappingFlowLayout(horizontalSpacing: CleanerSpacing.xs, verticalSpacing: CleanerSpacing.xxs) {
                 RiskBadge(risk: item.risk)
                 if let verificationStatus {
                     SnapshotVerificationBadge(status: verificationStatus)
                 }
-                Spacer()
                 if item.isRecommendedKeep {
                     KeepOriginalBadge()
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if let verificationStatus, verificationStatus != .unchanged,
                let blockedReason = SnapshotVerificationPolicy.blockedReason(for: verificationStatus) {
                 Text(blockedReason)
