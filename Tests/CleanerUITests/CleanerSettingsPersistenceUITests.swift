@@ -258,6 +258,356 @@ struct CleanerSettingsPersistenceUITests {
         #expect(relaunched.configuration.categories == [.largeFiles, .duplicates])
     }
 
+    @Test("Clear Stored Scan Data asks confirmation, honors Cancel, and deletes only session files while keeping settings and history")
+    @MainActor
+    func clearStoredScanDataPreservesSettingsAndHistory() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let settingsURL = sandbox.appendingPathComponent("CleanerMac/settings.json")
+        let snapshotURL = sandbox.appendingPathComponent("CleanerMac/session/last-scan.json")
+        let checkpointURL = sandbox.appendingPathComponent("CleanerMac/session/checkpoint.json")
+
+        let customRoot = sandbox.appendingPathComponent("CustomRoot", isDirectory: true)
+        try FileManager.default.createDirectory(at: customRoot, withIntermediateDirectories: true)
+        let scannedFile = customRoot.appendingPathComponent("big.bin")
+        try Data(repeating: 1, count: 64).write(to: scannedFile)
+
+        let settingsStore = FileBackedTestSettingsStore(fileURL: settingsURL)
+        try await settingsStore.save(
+            UserSettings(
+                scanRoots: [customRoot],
+                excludedFolders: [".git", "/tmp/KeepMe"],
+                oldFileThresholdDays: 120,
+                selectedCategories: [.largeFiles, .oldFiles],
+                lastSelectedCategory: .oldFiles,
+                sortOrder: .nameAscending,
+                isInspectorVisible: false
+            )
+        )
+
+        let snapshotItem = ScannedItem(
+            url: scannedFile,
+            name: "big.bin",
+            logicalSize: 200_000_000,
+            allocatedSize: 200_000_000,
+            isDirectory: false,
+            category: .largeFiles
+        )
+        let startedAt = Date(timeIntervalSince1970: 1_731_300_000)
+        let snapshot = ScanSnapshot(
+            startedAt: startedAt,
+            finishedAt: startedAt.addingTimeInterval(4),
+            duration: 4,
+            appVersion: "2.0.0",
+            configuration: ScanConfiguration(roots: [customRoot]),
+            progress: ScanProgress(phase: .completed, scannedFiles: 1, bytesEvaluated: 200_000_000, startedAt: startedAt),
+            categories: [CategorySnapshot(category: .largeFiles, items: [snapshotItem])],
+            duplicateGroups: [],
+            totalReclaimableBytes: snapshotItem.reclaimableDiskBytes
+        )
+        let snapshotStore = FileBackedTestSnapshotStore(fileURL: snapshotURL)
+        try await snapshotStore.save(snapshot)
+
+        let checkpoint = ScanCheckpoint(
+            configuration: ScanConfiguration(roots: [customRoot]),
+            pendingDirectories: [customRoot],
+            candidateFiles: [snapshotItem],
+            deadItems: [],
+            visitedDirectoryPaths: [],
+            scannedFiles: 1,
+            bytesEvaluated: 200_000_000,
+            startedAt: Date()
+        )
+        let checkpointStore = FileBackedTestCheckpointStore(fileURL: checkpointURL)
+        try await checkpointStore.save(checkpoint)
+
+        let historyEntry = TrashHistoryEntry(
+            originalPath: "/Users/alice/Downloads/old.dmg",
+            trashPath: "/Users/alice/.Trash/old.dmg",
+            bytes: 12_345,
+            trashInode: nil
+        )
+        let historyStore = SeededHistory(entries: [historyEntry])
+
+        let store = CleanerWorkspaceStore(
+            scanner: NoOpScanner(),
+            deleter: NoOpDeleter(),
+            historyStore: historyStore,
+            snapshotStore: snapshotStore,
+            settingsStore: settingsStore,
+            checkpointStore: checkpointStore,
+            previewService: PreviewService(),
+            permissionChecker: StaticGrantedChecker(),
+            notificationCenter: NotificationCenter(),
+            pathExists: { url in FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) }
+        )
+
+        await store.loadInitialSettings()
+        await store.loadInitialHistory()
+        await store.loadInitialSnapshot()
+        await store.loadInitialCheckpoint()
+
+        #expect(store.items(for: .largeFiles) == [snapshotItem])
+        #expect(store.interruptedCheckpointPresentation != nil)
+        #expect(store.historyEntries == [historyEntry])
+
+        // 1. Request confirmation, then cancel -> zero changes on disk or memory
+        store.requestClearStoredScanData()
+        #expect(store.showingClearStoredScanDataConfirmation == true)
+        store.showingClearStoredScanDataConfirmation = false
+
+        #expect(FileManager.default.fileExists(atPath: snapshotURL.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: checkpointURL.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: settingsURL.path(percentEncoded: false)))
+        #expect(store.items(for: .largeFiles) == [snapshotItem])
+        #expect(store.interruptedCheckpointPresentation != nil)
+
+        // 2. Confirm Clear Stored Scan Data -> deletes session JSONs & clears scan state, preserves settings & history
+        store.requestClearStoredScanData()
+        await store.clearStoredScanData()
+
+        #expect(store.showingClearStoredScanDataConfirmation == false)
+        #expect(!FileManager.default.fileExists(atPath: snapshotURL.path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: checkpointURL.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: settingsURL.path(percentEncoded: false)))
+
+        #expect(store.items(for: .largeFiles).isEmpty)
+        #expect(store.duplicateGroups.isEmpty)
+        #expect(store.loadedSnapshotFinishedAt == nil)
+        #expect(store.loadedSnapshotAge == nil)
+        #expect(store.interruptedCheckpointPresentation == nil)
+        #expect(store.progress.phase == .idle)
+
+        // Settings & Trash history MUST remain untouched
+        #expect(store.configuration.roots == [customRoot])
+        #expect(store.configuration.excludedFolders == [".git", "/tmp/KeepMe"])
+        #expect(store.configuration.oldFileThresholdDays == 120)
+        #expect(store.configuration.categories == [.largeFiles, .oldFiles])
+        #expect(store.sortOrder == .nameAscending)
+        #expect(store.isInspectorVisible == false)
+        #expect(store.historyEntries == [historyEntry])
+    }
+
+    @Test("Reset Settings asks confirmation, deletes settings.json without re-creating it, and preserves scan data")
+    @MainActor
+    func resetSettingsRestoresDefaultsAndPreservesScanData() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let settingsURL = sandbox.appendingPathComponent("CleanerMac/settings.json")
+        let snapshotURL = sandbox.appendingPathComponent("CleanerMac/session/last-scan.json")
+        let checkpointURL = sandbox.appendingPathComponent("CleanerMac/session/checkpoint.json")
+
+        let customRoot = sandbox.appendingPathComponent("CustomRoot", isDirectory: true)
+        try FileManager.default.createDirectory(at: customRoot, withIntermediateDirectories: true)
+        let scannedFile = customRoot.appendingPathComponent("clip.mov")
+        try Data(repeating: 2, count: 64).write(to: scannedFile)
+
+        let settingsStore = FileBackedTestSettingsStore(fileURL: settingsURL)
+        let snapshotStore = FileBackedTestSnapshotStore(fileURL: snapshotURL)
+        let checkpointStore = FileBackedTestCheckpointStore(fileURL: checkpointURL)
+
+        let item = ScannedItem(
+            url: scannedFile,
+            name: "clip.mov",
+            logicalSize: 150_000_000,
+            allocatedSize: 150_000_000,
+            isDirectory: false,
+            category: .largeFiles
+        )
+        let startedAt = Date(timeIntervalSince1970: 1_731_300_000)
+        try await snapshotStore.save(
+            ScanSnapshot(
+                startedAt: startedAt,
+                finishedAt: startedAt.addingTimeInterval(2),
+                duration: 2,
+                appVersion: "2.0.0",
+                configuration: ScanConfiguration(roots: [customRoot]),
+                progress: ScanProgress(phase: .completed, scannedFiles: 1, bytesEvaluated: 150_000_000, startedAt: startedAt),
+                categories: [CategorySnapshot(category: .largeFiles, items: [item])],
+                duplicateGroups: [],
+                totalReclaimableBytes: item.reclaimableDiskBytes
+            )
+        )
+        try await checkpointStore.save(
+            ScanCheckpoint(
+                configuration: ScanConfiguration(roots: [customRoot]),
+                pendingDirectories: [customRoot],
+                candidateFiles: [],
+                deadItems: [],
+                visitedDirectoryPaths: [],
+                scannedFiles: 1,
+                bytesEvaluated: 150_000_000,
+                startedAt: Date()
+            )
+        )
+
+        let store = CleanerWorkspaceStore(
+            scanner: NoOpScanner(),
+            deleter: NoOpDeleter(),
+            historyStore: EmptyHistory(),
+            snapshotStore: snapshotStore,
+            settingsStore: settingsStore,
+            checkpointStore: checkpointStore,
+            previewService: PreviewService(),
+            permissionChecker: StaticGrantedChecker(),
+            notificationCenter: NotificationCenter(),
+            pathExists: { url in FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) }
+        )
+
+        store.configuration.roots = [customRoot]
+        store.configuration.oldFileThresholdDays = 365
+        store.configuration.categories = [.largeFiles]
+        store.sortOrder = .riskHighest
+        store.isInspectorVisible = false
+        store.isDryRunEnabled = true
+        store.selectedSidebarDestination = .settings
+        await store.flushSettingsSave()
+        await store.loadInitialSnapshot()
+
+        #expect(FileManager.default.fileExists(atPath: settingsURL.path(percentEncoded: false)))
+
+        store.requestResetSettings()
+        #expect(store.showingResetSettingsConfirmation == true)
+        await store.resetSettingsToDefaults()
+        await store.flushSettingsSave()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(store.showingResetSettingsConfirmation == false)
+        #expect(!FileManager.default.fileExists(atPath: settingsURL.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: snapshotURL.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: checkpointURL.path(percentEncoded: false)))
+
+        #expect(store.configuration == ScanConfiguration())
+        #expect(store.sortOrder == .sizeDescending)
+        #expect(store.isInspectorVisible == true)
+        #expect(store.isDryRunEnabled == false)
+        #expect(store.selectedSidebarDestination == .settings)
+        #expect(store.items(for: .largeFiles) == [item])
+    }
+
+    @Test("ScanSettingsView Stored Data & Reset card and confirmation sheets use opaque surfaces and trigger cleanly")
+    @MainActor
+    func storedDataCardAndConfirmationSheetsRenderOpaquely() async throws {
+        enableSwiftUIAccessibilityTree()
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let settingsURL = sandbox.appendingPathComponent("CleanerMac/settings.json")
+        let store = makeStore(settingsURL: settingsURL)
+
+        let hostingController = NSHostingController(
+            rootView: ScanSettingsView(store: store, showsHeader: false)
+                .frame(minWidth: 580, minHeight: 520)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 1350),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentViewController = hostingController
+        window.setContentSize(NSSize(width: 580, height: 1350))
+        window.makeKeyAndOrderFront(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(250))
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        let fittedAt580 = hostingController.sizeThatFits(in: CGSize(width: 580, height: 520))
+        #expect(fittedAt580.width <= 580.5)
+        if let scrollView = findScrollView(in: window.contentView),
+           let documentView = scrollView.documentView {
+            #expect(documentView.frame.width <= 580.5)
+        }
+
+        #expect(!containsVisualEffectView(in: window.contentView))
+        #expect(containsText("Stored Data & Reset", in: window.contentView))
+        let identifiers = collectAccessibilityIdentifiers(in: window.contentView)
+        #expect(identifiers.contains("settingsStoredDataCard"))
+
+        let clearButton = try #require(
+            findButton(
+                in: window,
+                matchingIdentifier: "settingsClearStoredScanDataButton",
+                fallbackText: "Clear Stored Scan Data…"
+            )
+        )
+        #expect(clearButton.frameInWindow.minX >= 0 && clearButton.frameInWindow.maxX <= 580.5)
+        #expect(clearButton.press() == true)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(store.showingClearStoredScanDataConfirmation == true)
+
+        // Reset sheet flag and press Reset Settings button
+        store.showingClearStoredScanDataConfirmation = false
+        let resetButton = try #require(
+            findButton(
+                in: window,
+                matchingIdentifier: "settingsResetDefaultsButton",
+                fallbackText: "Reset Settings to Defaults…"
+            )
+        )
+        #expect(resetButton.frameInWindow.minX >= 0 && resetButton.frameInWindow.maxX <= 580.5)
+        #expect(resetButton.press() == true)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(store.showingResetSettingsConfirmation == true)
+
+        // Verify both confirmation sheets render without NSVisualEffectView and wire confirm callbacks
+        var confirmedClear = false
+        let clearSheetHost = NSHostingController(
+            rootView: ClearStoredScanDataConfirmationSheet(
+                onConfirm: { confirmedClear = true },
+                onCancel: {}
+            )
+        )
+        let clearWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 220), styleMask: [.titled], backing: .buffered, defer: false)
+        clearWindow.isReleasedWhenClosed = false
+        clearWindow.contentViewController = clearSheetHost
+        clearWindow.makeKeyAndOrderFront(nil)
+        clearWindow.contentView?.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(150))
+        defer { clearWindow.close() }
+        #expect(!containsVisualEffectView(in: clearWindow.contentView))
+        let confirmClearButton = try #require(
+            findButton(
+                in: clearWindow,
+                matchingIdentifier: "confirmClearStoredScanDataButton",
+                fallbackText: "Clear Stored Scan Data"
+            )
+        )
+        #expect(confirmClearButton.press() == true)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(confirmedClear == true)
+
+        var confirmedReset = false
+        let resetSheetHost = NSHostingController(
+            rootView: ResetSettingsConfirmationSheet(
+                onConfirm: { confirmedReset = true },
+                onCancel: {}
+            )
+        )
+        let resetWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 220), styleMask: [.titled], backing: .buffered, defer: false)
+        resetWindow.isReleasedWhenClosed = false
+        resetWindow.contentViewController = resetSheetHost
+        resetWindow.makeKeyAndOrderFront(nil)
+        resetWindow.contentView?.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(150))
+        defer { resetWindow.close() }
+        #expect(!containsVisualEffectView(in: resetWindow.contentView))
+        let confirmResetButton = try #require(
+            findButton(
+                in: resetWindow,
+                matchingIdentifier: "confirmResetSettingsButton",
+                fallbackText: "Reset Settings"
+            )
+        )
+        #expect(confirmResetButton.press() == true)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(confirmedReset == true)
+    }
+
     @MainActor
     private func enableSwiftUIAccessibilityTree() {
         let app = NSApplication.shared
@@ -389,6 +739,84 @@ struct CleanerSettingsPersistenceUITests {
 
         return inspect(rootView)
     }
+
+    private struct ButtonHandle {
+        let frameInWindow: NSRect
+        let press: @MainActor () -> Bool
+    }
+
+    @MainActor
+    private func findButton(
+        in window: NSWindow,
+        matchingIdentifier identifier: String,
+        fallbackText: String
+    ) -> ButtonHandle? {
+        guard let rootView = window.contentView else { return nil }
+        var visited = Set<ObjectIdentifier>()
+
+        func inspect(_ node: AnyObject) -> ButtonHandle? {
+            let oid = ObjectIdentifier(node)
+            guard visited.insert(oid).inserted else { return nil }
+
+            if let button = node as? NSButton, !(button is NSPopUpButton) {
+                let idMatch = button.accessibilityIdentifier() == identifier || button.identifier?.rawValue == identifier
+                let textMatch = button.title == fallbackText
+                    || button.accessibilityTitle() == fallbackText
+                    || button.accessibilityLabel() == fallbackText
+                if idMatch || textMatch {
+                    return ButtonHandle(
+                        frameInWindow: button.convert(button.bounds, to: nil),
+                        press: {
+                            button.performClick(nil)
+                            return true
+                        }
+                    )
+                }
+            }
+
+            let role = node.accessibilityRole?()
+            let axIdentifier = node.accessibilityIdentifier?()
+            let axTitle = node.accessibilityTitle?()
+            let axLabel = node.accessibilityLabel?()
+            let idMatch = axIdentifier == identifier
+            let textMatch = axTitle == fallbackText
+                || axLabel == fallbackText
+                || (axTitle?.contains(fallbackText) == true)
+                || (axLabel?.contains(fallbackText) == true)
+            if role == .button && (idMatch || textMatch) {
+                let screenFrame = node.accessibilityFrame?() ?? .zero
+                return ButtonHandle(
+                    frameInWindow: window.convertFromScreen(screenFrame),
+                    press: { node.accessibilityPerformPress?() ?? false }
+                )
+            }
+
+            if let children = node.accessibilityChildren?() {
+                for child in children {
+                    if let found = inspect(child as AnyObject) {
+                        return found
+                    }
+                }
+            }
+            if let view = node as? NSView {
+                for sub in view.subviews {
+                    if let found = inspect(sub) {
+                        return found
+                    }
+                }
+            }
+            return nil
+        }
+
+        return inspect(rootView)
+    }
+
+    @MainActor
+    private func containsVisualEffectView(in rootView: NSView?) -> Bool {
+        guard let rootView else { return false }
+        if rootView is NSVisualEffectView { return true }
+        return rootView.subviews.contains { containsVisualEffectView(in: $0) }
+    }
 }
 
 private actor FileBackedTestSettingsStore: UserSettingsStoring {
@@ -414,13 +842,90 @@ private actor FileBackedTestSettingsStore: UserSettingsStoring {
         let data = try encoder.encode(settings)
         try data.write(to: fileURL, options: .atomic)
     }
+
+    func clear() {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}
+
+private actor FileBackedTestSnapshotStore: ScanSnapshotStoring {
+    let fileURL: URL
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    func load() -> ScanSnapshot? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(ScanSnapshot.self, from: data)
+    }
+
+    func save(_ snapshot: ScanSnapshot) throws {
+        let dir = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    func clear() {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}
+
+private actor FileBackedTestCheckpointStore: ScanCheckpointStoring {
+    let fileURL: URL
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    func load() -> ScanCheckpointLoadResult {
+        guard let data = try? Data(contentsOf: fileURL) else { return .none }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let checkpoint = try? decoder.decode(ScanCheckpoint.self, from: data) else {
+            return .corrupted
+        }
+        return .loaded(checkpoint: checkpoint, savedAt: Date(), compressedFileBytes: data.count, uncompressedBytes: data.count)
+    }
+
+    func save(_ checkpoint: ScanCheckpoint) throws {
+        try saveSynchronously(checkpoint)
+    }
+
+    nonisolated func saveSynchronously(_ checkpoint: ScanCheckpoint) throws {
+        let dir = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(checkpoint)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    func clear() {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
 }
 
 private actor InMemorySnapshotStore: ScanSnapshotStoring {
-    let snapshot: ScanSnapshot?
+    var snapshot: ScanSnapshot?
     init(snapshot: ScanSnapshot?) { self.snapshot = snapshot }
     func load() -> ScanSnapshot? { snapshot }
-    func save(_ snapshot: ScanSnapshot) throws {}
+    func save(_ snapshot: ScanSnapshot) throws { self.snapshot = snapshot }
+    func clear() { snapshot = nil }
+}
+
+private actor SeededHistory: HistoryStoring {
+    var entries: [TrashHistoryEntry]
+    init(entries: [TrashHistoryEntry]) { self.entries = entries }
+    func loadEntries() async -> [TrashHistoryEntry] { entries }
+    func append(_ newEntries: [TrashHistoryEntry]) async { entries.append(contentsOf: newEntries) }
+    func remove(ids: Set<UUID>) async { entries.removeAll { ids.contains($0.id) } }
 }
 
 private actor NoOpScanner: ScanningServicing {

@@ -139,6 +139,8 @@ public final class CleanerWorkspaceStore {
 
     public var showingTrashConfirmation: Bool = false
     public var showingPermanentConfirmation: Bool = false
+    public var showingClearStoredScanDataConfirmation: Bool = false
+    public var showingResetSettingsConfirmation: Bool = false
     public var pendingDeletionItems: [ScannedItem] = []
     public var lastExecutionReport: DeletionExecutionReport?
     public var statusBannerMessage: String?
@@ -191,7 +193,7 @@ public final class CleanerWorkspaceStore {
         },
         nowProvider: @escaping @Sendable () -> Date = { Date() },
         appVersionProvider: @escaping @Sendable () -> String = {
-            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0.0"
         },
         openURLHandler: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
@@ -304,6 +306,74 @@ public final class CleanerWorkspaceStore {
         }
         guard updated != configuration.categories else { return }
         configuration.categories = updated
+    }
+
+    public func requestClearStoredScanData() {
+        guard !isScanning else { return }
+        showingClearStoredScanDataConfirmation = true
+    }
+
+    public func clearStoredScanData() async {
+        guard !isScanning else { return }
+
+        showingClearStoredScanDataConfirmation = false
+        activeScanID = UUID()
+        activeScanConfiguration = nil
+        cancellationBag.cancel("stream")
+        cancellationBag.cancel("preview")
+
+        await snapshotStore?.clear()
+        await checkpointStore?.clear()
+
+        itemsByCategory = [:]
+        duplicateGroups = []
+        selection = MultiSelectState()
+        pendingDeletionItems = []
+        previewPayload = nil
+        isLoadingPreview = false
+        progress = ScanProgress()
+        savedCheckpoint = nil
+        pendingInterruptedCheckpoint = nil
+        loadedSnapshotFinishedAt = nil
+        loadedSnapshotAge = nil
+        isSnapshotBannerDismissed = false
+        unavailableSnapshotRoots = []
+        unavailableSnapshotItems = []
+        isReverifyingSnapshot = false
+        snapshotVerificationStatuses = [:]
+        lastCompletedSnapshotConfiguration = nil
+        lastCompletedStartedAt = nil
+        lastCompletedFinishedAt = nil
+        lastCompletedProgress = nil
+        statusBannerMessage = "Cleared stored scan snapshot and checkpoint."
+    }
+
+    public func requestResetSettings() {
+        showingResetSettingsConfirmation = true
+    }
+
+    public func resetSettingsToDefaults() async {
+        showingResetSettingsConfirmation = false
+
+        latestPendingSettings = nil
+        await activeSettingsSaveTask?.value
+        latestPendingSettings = nil
+        await settingsStore?.clear()
+
+        isApplyingLoadedSettings = true
+        configuration = ScanConfiguration()
+        sortOrder = .sizeDescending
+        isInspectorVisible = true
+        lastSelectedCategory = .duplicates
+        didRestoreCategoryPreference = false
+        isDryRunEnabled = false
+        if case .category = selectedSidebarDestination {
+            selectedSidebarDestination = .category(.duplicates)
+        }
+        isApplyingLoadedSettings = false
+
+        await refreshVolumeStorage()
+        statusBannerMessage = "Reset scan and view settings to defaults."
     }
 
     public func flushSettingsSave() async {

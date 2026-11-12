@@ -35,5 +35,9 @@ public actor UserSettingsStore {
             throw UserSettingsStoreError.tempFileCreationFailed(path: path)
         }
     }
+
+    public func clear() {
+        AtomicJSONFile.removeFileAndQuarantinedSiblings(at: fileURL)
+    }
 }
 

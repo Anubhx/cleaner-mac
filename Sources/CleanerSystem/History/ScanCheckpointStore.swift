@@ -57,7 +57,7 @@ public actor ScanCheckpointStore {
 
     public func clear() {
         ioLock.withLock {
-            try? FileManager.default.removeItem(at: fileURL)
+            AtomicJSONFile.removeFileAndQuarantinedSiblings(at: fileURL)
         }
     }
 

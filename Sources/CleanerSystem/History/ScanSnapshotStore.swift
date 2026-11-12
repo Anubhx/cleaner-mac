@@ -40,4 +40,8 @@ public actor ScanSnapshotStore {
             throw ScanSnapshotStoreError.tempFileCreationFailed(path: path)
         }
     }
+
+    public func clear() {
+        AtomicJSONFile.removeFileAndQuarantinedSiblings(at: fileURL)
+    }
 }

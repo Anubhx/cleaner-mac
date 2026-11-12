@@ -46,12 +46,33 @@ public struct ScanSettingsView: View {
                 thresholdsCard
                 categoriesCard
                 safetyPolicyCard
+                storedDataCard
             }
             .padding(CleanerSpacing.lg)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             store.refreshPermissionStatus()
+        }
+        .sheet(isPresented: $store.showingClearStoredScanDataConfirmation) {
+            ClearStoredScanDataConfirmationSheet(
+                onConfirm: {
+                    Task { await store.clearStoredScanData() }
+                },
+                onCancel: {
+                    store.showingClearStoredScanDataConfirmation = false
+                }
+            )
+        }
+        .sheet(isPresented: $store.showingResetSettingsConfirmation) {
+            ResetSettingsConfirmationSheet(
+                onConfirm: {
+                    Task { await store.resetSettingsToDefaults() }
+                },
+                onCancel: {
+                    store.showingResetSettingsConfirmation = false
+                }
+            )
         }
     }
 
@@ -332,6 +353,72 @@ public struct ScanSettingsView: View {
             RoundedRectangle(cornerRadius: CleanerRadii.md)
                 .stroke(CleanerColors.hairline, lineWidth: 1)
         )
+    }
+
+    private var storedDataCard: some View {
+        VStack(alignment: .leading, spacing: CleanerSpacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Stored Data & Reset")
+                    .font(CleanerTypography.headline)
+                Text("Manage local persistence files under ~/Library/Application Support/CleanerMac/.")
+                    .font(CleanerTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(alignment: .center, spacing: CleanerSpacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Stored Scan Data")
+                        .font(CleanerTypography.body)
+                    Text("Deletes session/last-scan.json and session/checkpoint.json while keeping settings.json and Trash history.")
+                        .font(CleanerTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: CleanerSpacing.sm)
+
+                Button("Clear Stored Scan Data…", role: .destructive) {
+                    store.requestClearStoredScanData()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isScanning)
+                .accessibilityIdentifier("settingsClearStoredScanDataButton")
+                .help("Delete stored scan snapshot and checkpoint from disk")
+            }
+
+            Divider()
+
+            HStack(alignment: .center, spacing: CleanerSpacing.sm) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Settings & Preferences")
+                        .font(CleanerTypography.body)
+                    Text("Deletes settings.json and restores default folders, thresholds, categories, and view options.")
+                        .font(CleanerTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: CleanerSpacing.sm)
+
+                Button("Reset Settings to Defaults…", role: .destructive) {
+                    store.requestResetSettings()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("settingsResetDefaultsButton")
+                .help("Reset configuration and UI preferences to defaults")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(CleanerSpacing.md)
+        .background(CleanerColors.cardFill, in: RoundedRectangle(cornerRadius: CleanerRadii.md))
+        .overlay(
+            RoundedRectangle(cornerRadius: CleanerRadii.md)
+                .stroke(CleanerColors.hairline, lineWidth: 1)
+        )
+        .accessibilityIdentifier("settingsStoredDataCard")
     }
 
     private func categoryBinding(for category: ScanCategory) -> Binding<Bool> {

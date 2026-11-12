@@ -416,4 +416,34 @@ struct ScanSnapshotStoreTests {
         let loaded = await store.load()
         #expect(loaded == snapshot)
     }
+
+    @Test("clear() deletes last-scan.json and quarantined .corrupt-* siblings cleanly and is idempotent")
+    func clearDeletesSnapshotAndQuarantinedSiblings() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let fileURL = makeSessionFileURL(in: sandbox)
+        let sessionDir = fileURL.deletingLastPathComponent()
+        let store = ScanSnapshotStore(fileURL: fileURL)
+
+        // Idempotent when directory doesn't exist yet
+        await store.clear()
+
+        // Create corrupt sibling + valid snapshot + unrelated file (checkpoint.json)
+        try await store.save(makeSnapshot())
+        let siblingCorrupt = sessionDir.appendingPathComponent("last-scan.json.corrupt-2026-01-01T00:00:00Z")
+        try Data("bad".utf8).write(to: siblingCorrupt)
+        let checkpointSibling = sessionDir.appendingPathComponent("checkpoint.json")
+        try Data("keep-me".utf8).write(to: checkpointSibling)
+
+        await store.clear()
+
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: siblingCorrupt.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: checkpointSibling.path(percentEncoded: false)))
+        #expect(await store.load() == nil)
+
+        // Second clear stays a clean no-op
+        await store.clear()
+    }
 }

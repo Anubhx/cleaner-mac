@@ -305,5 +305,30 @@ struct ScanCheckpointStoreTests {
         #expect(cancelOutcome.wasCancelled)
         #expect(!FileManager.default.fileExists(atPath: checkpointURL.path(percentEncoded: false)))
     }
+
+    @Test("clear() deletes checkpoint.json and quarantined .corrupt-* siblings cleanly while preserving sibling last-scan.json")
+    func clearDeletesCheckpointAndQuarantinedSiblings() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let fileURL = makeCheckpointFileURL(in: sandbox)
+        let dirURL = fileURL.deletingLastPathComponent()
+        let store = ScanCheckpointStore(fileURL: fileURL)
+
+        await store.clear()
+
+        try await store.save(makeRealisticCheckpoint(directoryCount: 10, filesPerDir: 2))
+        let corruptSibling = dirURL.appendingPathComponent("checkpoint.json.corrupt-2026-01-01T00:00:00Z")
+        try Data("bad".utf8).write(to: corruptSibling)
+        let snapshotSibling = dirURL.appendingPathComponent("last-scan.json")
+        try Data("{}".utf8).write(to: snapshotSibling)
+
+        await store.clear()
+
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: corruptSibling.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: snapshotSibling.path(percentEncoded: false)))
+        #expect(await store.load() == .none)
+    }
 }
 

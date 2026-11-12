@@ -119,5 +119,25 @@ enum AtomicJSONFile {
 
         try? fileManager.moveItem(at: fileURL, to: destinationURL)
     }
+
+    static func removeFileAndQuarantinedSiblings(at fileURL: URL, fileManager: FileManager = .default) {
+        let targetPath = fileURL.path(percentEncoded: false)
+        if fileManager.fileExists(atPath: targetPath) {
+            try? fileManager.removeItem(at: fileURL)
+        }
+
+        let directoryURL = fileURL.deletingLastPathComponent()
+        let corruptPrefix = "\(fileURL.lastPathComponent).corrupt-"
+        guard let siblings = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else {
+            return
+        }
+        for sibling in siblings where sibling.lastPathComponent.hasPrefix(corruptPrefix) {
+            try? fileManager.removeItem(at: sibling)
+        }
+    }
 }
 

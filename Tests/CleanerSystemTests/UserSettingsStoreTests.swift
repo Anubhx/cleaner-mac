@@ -171,5 +171,33 @@ struct UserSettingsStoreTests {
         let loaded = try #require(await store.load())
         #expect(candidates.contains(loaded))
     }
+
+    @Test("clear() removes settings.json and quarantined .corrupt-* siblings without touching other files")
+    func clearRemovesSettingsAndQuarantinedSiblings() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let fileURL = makeSettingsFileURL(in: sandbox)
+        let dir = fileURL.deletingLastPathComponent()
+        let store = UserSettingsStore(fileURL: fileURL)
+
+        // Idempotent when missing
+        await store.clear()
+
+        try await store.save(UserSettings(oldFileThresholdDays: 77))
+        let corruptSibling = dir.appendingPathComponent("settings.json.corrupt-2026-01-01T00:00:00Z")
+        try Data("corrupt".utf8).write(to: corruptSibling)
+        let historySibling = dir.appendingPathComponent("trash-history.json")
+        try Data("[]".utf8).write(to: historySibling)
+
+        await store.clear()
+
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: corruptSibling.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: historySibling.path(percentEncoded: false)))
+        #expect(await store.load() == nil)
+
+        await store.clear()
+    }
 }
 

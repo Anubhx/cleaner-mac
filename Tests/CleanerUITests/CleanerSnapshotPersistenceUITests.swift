@@ -464,6 +464,10 @@ private actor FakeSnapshotService: ScanSnapshotStoring {
         stored = snapshot
         saveCount += 1
     }
+
+    func clear() {
+        stored = nil
+    }
 }
 
 private actor IdleFakeScanner: ScanningServicing {
@@ -590,4 +594,5 @@ private actor SlowSnapshotService: ScanSnapshotStoring {
     }
 
     func save(_ snapshot: ScanSnapshot) throws {}
+    func clear() {}
 }

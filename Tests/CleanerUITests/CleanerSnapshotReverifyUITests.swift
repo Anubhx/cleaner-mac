@@ -386,6 +386,7 @@ private actor StubSnapshotStore: ScanSnapshotStoring {
     init(snapshot: ScanSnapshot?) { self.snapshot = snapshot }
     func load() -> ScanSnapshot? { snapshot }
     func save(_ snapshot: ScanSnapshot) throws {}
+    func clear() {}
 }
 
 private actor IdleScanner: ScanningServicing {

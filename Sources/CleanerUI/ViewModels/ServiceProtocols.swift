@@ -54,11 +54,13 @@ public protocol HistoryStoring: Sendable {
 public protocol ScanSnapshotStoring: Sendable {
     func load() async -> ScanSnapshot?
     func save(_ snapshot: ScanSnapshot) async throws
+    func clear() async
 }
 
 public protocol UserSettingsStoring: Sendable {
     func load() async -> UserSettings?
     func save(_ settings: UserSettings) async throws
+    func clear() async
 }
 
 public protocol ScanCheckpointStoring: Sendable {
