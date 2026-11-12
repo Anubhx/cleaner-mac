@@ -330,5 +330,91 @@ struct ScanCheckpointStoreTests {
         #expect(FileManager.default.fileExists(atPath: snapshotSibling.path(percentEncoded: false)))
         #expect(await store.load() == .none)
     }
+
+    @Test("Realistic multi-thousand-file scan measures actual uncompressed vs zlib-compressed checkpoint.json size on disk")
+    func realisticScanCheckpointCompressionMeasurement() async throws {
+        let sandbox = try makeSandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        let scanRoot = sandbox.appendingPathComponent("RealisticWorkspace", isDirectory: true)
+        let moduleCount = 30
+        let subdirsPerModule = 40 // 1,200 leaf directories (+ 30 module dirs + root = 1,231 dirs)
+        let smallPayload = Data(repeating: 0x41, count: 128)
+        let largePayload = Data(repeating: 0x5A, count: 8_192)
+
+        for m in 0..<moduleCount {
+            let moduleDir = scanRoot.appendingPathComponent("project-module-\(m)", isDirectory: true)
+            for s in 0..<subdirsPerModule {
+                let leafDir = moduleDir.appendingPathComponent("feature-bundle-\(s)", isDirectory: true)
+                try FileManager.default.createDirectory(at: leafDir, withIntermediateDirectories: true)
+                // Create 2 files per leaf directory (2,400 files total; every second dir has an 8KB candidate)
+                let docFile = leafDir.appendingPathComponent("notes-\(m)-\(s).txt")
+                try smallPayload.write(to: docFile)
+                let artifactFile = leafDir.appendingPathComponent("build-artifact-\(m)-\(s).bin")
+                if s.isMultiple(of: 2) {
+                    try largePayload.write(to: artifactFile)
+                } else {
+                    try smallPayload.write(to: artifactFile)
+                }
+            }
+        }
+
+        let checkpointURL = makeCheckpointFileURL(in: sandbox)
+        let checkpointStore = ScanCheckpointStore(fileURL: checkpointURL)
+        let config = ScanConfiguration(
+            roots: [scanRoot],
+            categories: [.largeFiles],
+            largeFileThresholdBytes: 4_096
+        )
+
+        let coordinator = ScanCoordinator(
+            safetyGuard: SafetyGuard(currentUserHome: sandbox),
+            perDirectoryDelay: .milliseconds(1),
+            checkpointDirectoryInterval: 100,
+            checkpointStore: checkpointStore
+        )
+
+        let scanTask = Task {
+            await coordinator.runFullScan(configuration: config)
+        }
+        // Let the scan process ~250-350 directories (out of 1,231) so checkpoint captures both visited and pending frontiers
+        try await Task.sleep(for: .milliseconds(550))
+        let pausedCheckpoint = await coordinator.pause()
+        let pausedOutcome = await scanTask.value
+        #expect(pausedOutcome.progress.phase == .paused)
+
+        try await checkpointStore.save(pausedCheckpoint)
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: checkpointURL.path(percentEncoded: false))
+        let diskBytes = try #require((attrs[.size] as? NSNumber)?.intValue)
+
+        guard case .loaded(let restored, _, let compressedFileBytes, let uncompressedBytes) = await checkpointStore.load() else {
+            Issue.record("Expected realistic checkpoint.json to load cleanly")
+            return
+        }
+
+        // ISO-8601 encoding truncates sub-second fractions on Date fields; verify exact structural parity
+        #expect(restored.configuration == pausedCheckpoint.configuration)
+        #expect(restored.pendingDirectories == pausedCheckpoint.pendingDirectories)
+        #expect(restored.visitedDirectoryPaths == pausedCheckpoint.visitedDirectoryPaths)
+        #expect(restored.candidateFiles.map(\.url) == pausedCheckpoint.candidateFiles.map(\.url))
+        #expect(restored.scannedFiles == pausedCheckpoint.scannedFiles)
+        #expect(restored.bytesEvaluated == pausedCheckpoint.bytesEvaluated)
+        #expect(abs(restored.startedAt.timeIntervalSince(pausedCheckpoint.startedAt)) < 1.0)
+        #expect(diskBytes == compressedFileBytes)
+        #expect(compressedFileBytes < uncompressedBytes)
+        #expect(Double(compressedFileBytes) < Double(uncompressedBytes) * 0.35)
+
+        let reductionPercent = (1.0 - Double(compressedFileBytes) / Double(uncompressedBytes)) * 100.0
+        print(String(
+            format: "[CHECKPOINT_COMPRESSION_METRICS] visitedDirs=%d pendingDirs=%d candidates=%d uncompressedJSONBytes=%d compressedFileBytes=%d reductionPct=%.1f%%",
+            pausedCheckpoint.visitedDirectoryPaths.count,
+            pausedCheckpoint.pendingDirectories.count,
+            pausedCheckpoint.candidateFiles.count,
+            uncompressedBytes,
+            compressedFileBytes,
+            reductionPercent
+        ))
+    }
 }
 
