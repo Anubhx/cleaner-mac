@@ -61,7 +61,8 @@ public actor DeletionExecutor {
         mode: DeletionMode,
         dryRun: Bool,
         excludedFolders: [String] = [],
-        allowAppBundles: Bool = false
+        allowAppBundles: Bool = false,
+        verifySnapshotItems: Bool = false
     ) async throws -> DeletionExecutionReport {
         let guardPolicy = safetyGuard
         let driver = trashDriver
@@ -73,9 +74,23 @@ public actor DeletionExecutor {
                 dryRun: dryRun,
                 excludedFolders: excludedFolders,
                 allowAppBundles: allowAppBundles,
+                verifySnapshotItems: verifySnapshotItems,
                 safetyGuard: guardPolicy,
                 trashDriver: driver
             )
+        }.value
+    }
+
+    public nonisolated func verifySnapshotItems(_ items: [ScannedItem]) async -> [UUID: SnapshotVerificationStatus] {
+        await Task.detached(priority: .userInitiated) {
+            var statuses: [UUID: SnapshotVerificationStatus] = [:]
+            statuses.reserveCapacity(items.count)
+            for item in items {
+                if Task.isCancelled { break }
+                let live = FilesystemProbes.liveFileStat(for: item.url)
+                statuses[item.id] = SnapshotVerificationPolicy.verify(item: item, against: live)
+            }
+            return statuses
         }.value
     }
 
@@ -92,6 +107,7 @@ public actor DeletionExecutor {
         dryRun: Bool,
         excludedFolders: [String],
         allowAppBundles: Bool,
+        verifySnapshotItems: Bool,
         safetyGuard: SafetyGuard,
         trashDriver: any TrashDriver
     ) throws -> DeletionExecutionReport {
@@ -101,7 +117,9 @@ public actor DeletionExecutor {
             dryRun: dryRun,
             safetyGuard: safetyGuard,
             excludedFolders: excludedFolders,
-            allowAppBundles: allowAppBundles
+            allowAppBundles: allowAppBundles,
+            requireSnapshotVerification: verifySnapshotItems,
+            liveStatProvider: verifySnapshotItems ? { FilesystemProbes.liveFileStat(for: $0) } : nil
         )
 
         if dryRun {
@@ -118,12 +136,27 @@ public actor DeletionExecutor {
 
         var succeeded: [ScannedItem] = []
         var historyEntries: [TrashHistoryEntry] = []
+        var blocked = plan.blocked
         var failures: [DeletionFailure] = []
         var reclaimed: UInt64 = 0
 
         for entry in plan.entries {
             if Task.isCancelled { break }
             let item = entry.item
+
+            if verifySnapshotItems {
+                let live = FilesystemProbes.liveFileStat(for: item.url)
+                let verification = SnapshotVerificationPolicy.verify(item: item, against: live)
+                if let reason = SnapshotVerificationPolicy.blockedReason(for: verification) {
+                    blocked.append(BlockedDeletionItem(
+                        url: item.url,
+                        reason: reason,
+                        verificationStatus: verification
+                    ))
+                    continue
+                }
+            }
+
             let resolved = FilesystemProbes.resolveRealPath(item.url)
 
             do {
@@ -169,7 +202,7 @@ public actor DeletionExecutor {
             mode: mode,
             succeededItems: succeeded,
             trashHistoryEntries: historyEntries,
-            blockedItems: plan.blocked,
+            blockedItems: blocked,
             failures: failures,
             reclaimedBytes: reclaimed
         )

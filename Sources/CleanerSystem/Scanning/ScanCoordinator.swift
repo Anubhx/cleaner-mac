@@ -3,9 +3,11 @@ import os
 import CleanerCore
 
 private final class ScanRunControl: Sendable {
-    private struct Flags: Sendable {
+    private struct Flags: @unchecked Sendable {
         var pauseRequested = false
         var cancelRequested = false
+        var captureSemaphore: DispatchSemaphore?
+        var capturedCheckpoint: ScanCheckpoint?
     }
 
     let generation: UUID
@@ -23,6 +25,35 @@ private final class ScanRunControl: Sendable {
         state.withLock { $0.cancelRequested = true }
     }
 
+    func requestUrgentCapture() -> DispatchSemaphore {
+        state.withLock { flags in
+            flags.pauseRequested = true
+            if let existing = flags.captureSemaphore {
+                return existing
+            }
+            let sem = DispatchSemaphore(value: 0)
+            flags.captureSemaphore = sem
+            return sem
+        }
+    }
+
+    func deliverCapturedCheckpoint(_ checkpoint: ScanCheckpoint) {
+        let sem = state.withLock { flags -> DispatchSemaphore? in
+            flags.capturedCheckpoint = checkpoint
+            return flags.captureSemaphore
+        }
+        sem?.signal()
+    }
+
+    func consumeCapturedCheckpoint() -> ScanCheckpoint? {
+        state.withLock { $0.capturedCheckpoint }
+    }
+
+    func signalFinishedWithoutCapture() {
+        let sem = state.withLock { $0.captureSemaphore }
+        sem?.signal()
+    }
+
     var isPaused: Bool {
         state.withLock { $0.pauseRequested }
     }
@@ -33,9 +64,21 @@ private final class ScanRunControl: Sendable {
 }
 
 public actor ScanCoordinator {
+    /// Balances APFS fsync overhead (<3-5% on SSD walks) against keeping crash / kill -9 loss bounded under 250 directories.
+    public static let defaultCheckpointDirectoryInterval = 250
+
+    private struct LiveScanState: Sendable {
+        var control: ScanRunControl?
+        var latestCheckpoint: ScanCheckpoint?
+    }
+
     private let safetyGuard: SafetyGuard
     private let perDirectoryDelay: Duration?
+    private let checkpointDirectoryInterval: Int
+    private let checkpointStore: ScanCheckpointStore?
+    private let onPeriodicCheckpoint: (@Sendable (ScanCheckpoint) async -> Void)?
 
+    private let liveStateLock = OSAllocatedUnfairLock(initialState: LiveScanState())
     private var activeGeneration = UUID()
     private var activeTask: Task<ScanOutcome, Never>?
     private var activeControl: ScanRunControl?
@@ -43,9 +86,28 @@ public actor ScanCoordinator {
     private var streamPair: (stream: AsyncStream<ScanBatch>, continuation: AsyncStream<ScanBatch>.Continuation) =
         AsyncStream.makeStream(of: ScanBatch.self)
 
-    public init(safetyGuard: SafetyGuard = SafetyGuard(), perDirectoryDelay: Duration? = nil) {
+    public init(
+        safetyGuard: SafetyGuard = SafetyGuard(),
+        perDirectoryDelay: Duration? = nil,
+        checkpointDirectoryInterval: Int = ScanCoordinator.defaultCheckpointDirectoryInterval,
+        checkpointStore: ScanCheckpointStore? = nil,
+        onPeriodicCheckpoint: (@Sendable (ScanCheckpoint) async -> Void)? = nil
+    ) {
         self.safetyGuard = safetyGuard
         self.perDirectoryDelay = perDirectoryDelay
+        self.checkpointDirectoryInterval = max(0, checkpointDirectoryInterval)
+        self.checkpointStore = checkpointStore
+        self.onPeriodicCheckpoint = onPeriodicCheckpoint
+    }
+
+    nonisolated public func captureCheckpointSynchronously() -> ScanCheckpoint? {
+        let snapshot = liveStateLock.withLock { $0 }
+        guard let control = snapshot.control else {
+            return snapshot.latestCheckpoint
+        }
+        let semaphore = control.requestUrgentCapture()
+        _ = semaphore.wait(timeout: .now() + .milliseconds(350))
+        return control.consumeCapturedCheckpoint() ?? liveStateLock.withLock { $0.latestCheckpoint } ?? snapshot.latestCheckpoint
     }
 
     public func makeProgressStream() -> AsyncStream<ScanBatch> {
@@ -117,7 +179,12 @@ public actor ScanCoordinator {
                 activeTask = nil
                 activeControl = nil
                 checkpoint = nil
+                liveStateLock.withLock {
+                    $0.control = nil
+                    $0.latestCheckpoint = nil
+                }
                 if outcome.progress.phase == .paused {
+                    await checkpointStore?.clear()
                     let cancelledProgress = ScanProgress(
                         phase: .cancelled,
                         currentPath: "",
@@ -138,6 +205,11 @@ public actor ScanCoordinator {
             activeTask = nil
             activeControl = nil
             checkpoint = nil
+            liveStateLock.withLock {
+                $0.control = nil
+                $0.latestCheckpoint = nil
+            }
+            await checkpointStore?.clear()
             emitBatch([], progress: fallbackProgress, finishStream: true)
         }
         return ScanOutcome(progress: fallbackProgress, wasCancelled: true)
@@ -177,15 +249,25 @@ public actor ScanCoordinator {
         let control = ScanRunControl(generation: generation)
         self.checkpoint = initial
         self.activeControl = control
+        liveStateLock.withLock {
+            $0.control = control
+            $0.latestCheckpoint = initial
+        }
 
         let guardPolicy = safetyGuard
         let delay = perDirectoryDelay
+        let interval = checkpointDirectoryInterval
+        let store = checkpointStore
+        let callback = onPeriodicCheckpoint
         let task = Task.detached(priority: .utility) { [weak self] in
             await Self.executeScanWorker(
                 coordinator: self,
                 startingFrom: initial,
                 safetyGuard: guardPolicy,
                 perDirectoryDelay: delay,
+                checkpointDirectoryInterval: interval,
+                checkpointStore: store,
+                onPeriodicCheckpoint: callback,
                 control: control
             )
         }
@@ -198,17 +280,21 @@ public actor ScanCoordinator {
         startingFrom initial: ScanCheckpoint,
         safetyGuard: SafetyGuard,
         perDirectoryDelay: Duration?,
+        checkpointDirectoryInterval: Int,
+        checkpointStore: ScanCheckpointStore?,
+        onPeriodicCheckpoint: (@Sendable (ScanCheckpoint) async -> Void)?,
         control: ScanRunControl
     ) async -> ScanOutcome {
         var state = FrontierWalkState(from: initial)
         var batchBuffer: [ScannedItem] = []
         var lastFlush = Date()
+        var directoriesSinceCheckpoint = 0
 
         while state.hasPendingDirectories {
             if Task.isCancelled || control.isCancelled {
                 return await finishCancelled(
                     coordinator: coordinator,
-                    generation: control.generation,
+                    control: control,
                     state: state,
                     buffer: batchBuffer
                 )
@@ -216,7 +302,7 @@ public actor ScanCoordinator {
             if control.isPaused {
                 return await finishPaused(
                     coordinator: coordinator,
-                    generation: control.generation,
+                    control: control,
                     state: state,
                     buffer: batchBuffer
                 )
@@ -227,7 +313,7 @@ public actor ScanCoordinator {
                 if Task.isCancelled || control.isCancelled {
                     return await finishCancelled(
                         coordinator: coordinator,
-                        generation: control.generation,
+                        control: control,
                         state: state,
                         buffer: batchBuffer
                     )
@@ -235,7 +321,7 @@ public actor ScanCoordinator {
                 if control.isPaused {
                     return await finishPaused(
                         coordinator: coordinator,
-                        generation: control.generation,
+                        control: control,
                         state: state,
                         buffer: batchBuffer
                     )
@@ -256,6 +342,26 @@ public actor ScanCoordinator {
                 safetyGuard: safetyGuard,
                 batchBuffer: &batchBuffer
             )
+
+            directoriesSinceCheckpoint += 1
+            if checkpointDirectoryInterval > 0,
+               directoriesSinceCheckpoint >= checkpointDirectoryInterval,
+               !control.isPaused,
+               !control.isCancelled,
+               !Task.isCancelled {
+                directoriesSinceCheckpoint = 0
+                let periodicCheckpoint = state.makeCheckpoint()
+                await coordinator?.recordPeriodicCheckpointIfCurrent(
+                    generation: control.generation,
+                    checkpoint: periodicCheckpoint
+                )
+                if let checkpointStore {
+                    try? await checkpointStore.save(periodicCheckpoint)
+                }
+                if let onPeriodicCheckpoint {
+                    await onPeriodicCheckpoint(periodicCheckpoint)
+                }
+            }
 
             let now = Date()
             if batchBuffer.count >= 64 || now.timeIntervalSince(lastFlush) >= 0.08 {
@@ -278,7 +384,7 @@ public actor ScanCoordinator {
         if Task.isCancelled || control.isCancelled {
             return await finishCancelled(
                 coordinator: coordinator,
-                generation: control.generation,
+                control: control,
                 state: state,
                 buffer: batchBuffer
             )
@@ -286,10 +392,24 @@ public actor ScanCoordinator {
         if control.isPaused {
             return await finishPaused(
                 coordinator: coordinator,
-                generation: control.generation,
+                control: control,
                 state: state,
                 buffer: batchBuffer
             )
+        }
+
+        if directoriesSinceCheckpoint > 0 && state.configuration.categories.contains(.duplicates) {
+            let preHashCheckpoint = state.makeCheckpoint()
+            await coordinator?.recordPeriodicCheckpointIfCurrent(
+                generation: control.generation,
+                checkpoint: preHashCheckpoint
+            )
+            if let checkpointStore {
+                try? await checkpointStore.save(preHashCheckpoint)
+            }
+            if let onPeriodicCheckpoint {
+                await onPeriodicCheckpoint(preHashCheckpoint)
+            }
         }
 
         let outcome = await finalizeOutcome(
@@ -298,16 +418,18 @@ public actor ScanCoordinator {
             safetyGuard: safetyGuard,
             control: control
         )
+        control.signalFinishedWithoutCapture()
         await coordinator?.completeRun(generation: control.generation, outcome: outcome)
         return outcome
     }
 
     private nonisolated static func finishCancelled(
         coordinator: ScanCoordinator?,
-        generation: UUID,
+        control: ScanRunControl,
         state: FrontierWalkState,
         buffer: [ScannedItem]
     ) async -> ScanOutcome {
+        control.signalFinishedWithoutCapture()
         let progress = ScanProgress(
             phase: .cancelled,
             currentPath: "",
@@ -318,17 +440,18 @@ public actor ScanCoordinator {
             startedAt: state.startedAt
         )
         let outcome = ScanOutcome(progress: progress, wasCancelled: true)
-        await coordinator?.completeCancelledRun(generation: generation, buffer: buffer, progress: progress)
+        await coordinator?.completeCancelledRun(generation: control.generation, buffer: buffer, progress: progress)
         return outcome
     }
 
     private nonisolated static func finishPaused(
         coordinator: ScanCoordinator?,
-        generation: UUID,
+        control: ScanRunControl,
         state: FrontierWalkState,
         buffer: [ScannedItem]
     ) async -> ScanOutcome {
         let saved = state.makeCheckpoint()
+        control.deliverCapturedCheckpoint(saved)
         let progress = ScanProgress(
             phase: .paused,
             currentPath: state.peekNextDirectory?.path ?? "",
@@ -338,7 +461,7 @@ public actor ScanCoordinator {
             skippedProtectedDirectories: state.skippedProtectedDirectories,
             startedAt: state.startedAt
         )
-        await coordinator?.recordPausedRun(generation: generation, checkpoint: saved, buffer: buffer, progress: progress)
+        await coordinator?.recordPausedRun(generation: control.generation, checkpoint: saved, buffer: buffer, progress: progress)
         return ScanOutcome(progress: progress, wasCancelled: false)
     }
 
@@ -448,16 +571,32 @@ public actor ScanCoordinator {
         emitBatch(items, progress: progress, finishStream: finishStream)
     }
 
+    private func recordPeriodicCheckpointIfCurrent(
+        generation: UUID,
+        checkpoint: ScanCheckpoint
+    ) {
+        guard generation == activeGeneration else { return }
+        self.checkpoint = checkpoint
+        liveStateLock.withLock {
+            $0.latestCheckpoint = checkpoint
+        }
+    }
+
     private func recordPausedRun(
         generation: UUID,
         checkpoint: ScanCheckpoint,
         buffer: [ScannedItem],
         progress: ScanProgress
-    ) {
+    ) async {
         guard generation == activeGeneration else { return }
         self.checkpoint = checkpoint
         self.activeTask = nil
         self.activeControl = nil
+        liveStateLock.withLock {
+            $0.control = nil
+            $0.latestCheckpoint = checkpoint
+        }
+        try? await checkpointStore?.save(checkpoint)
         emitBatch(buffer, progress: progress, finishStream: false)
     }
 
@@ -465,19 +604,29 @@ public actor ScanCoordinator {
         generation: UUID,
         buffer: [ScannedItem],
         progress: ScanProgress
-    ) {
+    ) async {
         guard generation == activeGeneration else { return }
         self.checkpoint = nil
         self.activeTask = nil
         self.activeControl = nil
+        liveStateLock.withLock {
+            $0.control = nil
+            $0.latestCheckpoint = nil
+        }
+        await checkpointStore?.clear()
         emitBatch(buffer, progress: progress, finishStream: true)
     }
 
-    private func completeRun(generation: UUID, outcome: ScanOutcome) {
+    private func completeRun(generation: UUID, outcome: ScanOutcome) async {
         guard generation == activeGeneration else { return }
         self.checkpoint = nil
         self.activeTask = nil
         self.activeControl = nil
+        liveStateLock.withLock {
+            $0.control = nil
+            $0.latestCheckpoint = nil
+        }
+        await checkpointStore?.clear()
         emitBatch([], progress: outcome.progress, finishStream: true)
     }
 

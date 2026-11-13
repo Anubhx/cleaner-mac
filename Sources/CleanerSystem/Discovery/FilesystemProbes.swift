@@ -89,6 +89,45 @@ public enum FilesystemProbes {
         )
     }
 
+    public static func liveFileStat(for url: URL) -> LiveFileStat {
+        var path = url.standardizedFileURL.path(percentEncoded: false)
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        var info = stat()
+        guard lstat(path, &info) == 0 else {
+            if errno == ENOENT || errno == ENOTDIR {
+                return .missing
+            }
+            return LiveFileStat(
+                exists: true,
+                isSymlink: false,
+                isDirectory: false,
+                inode: nil,
+                logicalSize: 0,
+                modifiedDate: nil
+            )
+        }
+        let fileType = info.st_mode & S_IFMT
+        let isSymlink = fileType == S_IFLNK
+        let isDirectory = fileType == S_IFDIR
+        let inode = InodeIdentity(
+            device: UInt64(UInt32(bitPattern: info.st_dev)),
+            inode: UInt64(info.st_ino)
+        )
+        let logicalSize = UInt64(max(0, info.st_size))
+        let modifiedSeconds = TimeInterval(info.st_mtimespec.tv_sec)
+            + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000.0
+        return LiveFileStat(
+            exists: true,
+            isSymlink: isSymlink,
+            isDirectory: isDirectory,
+            inode: inode,
+            logicalSize: logicalSize,
+            modifiedDate: Date(timeIntervalSince1970: modifiedSeconds)
+        )
+    }
+
     public static func resolveRealPath(_ url: URL) -> URL {
         url.resolvingSymlinksInPath().standardizedFileURL
     }

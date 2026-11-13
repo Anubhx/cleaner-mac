@@ -220,3 +220,87 @@ public struct ExecutionReportSheet: View {
         }
     }
 }
+
+public struct ClearStoredScanDataConfirmationSheet: View {
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    public init(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: CleanerSpacing.md) {
+            HStack(spacing: CleanerSpacing.sm) {
+                Image(systemName: "trash")
+                    .font(.title)
+                    .foregroundStyle(CleanerColors.danger)
+                Text("Clear Stored Scan Data")
+                    .font(CleanerTypography.titleLarge())
+            }
+
+            Text("This deletes your saved scan snapshot (session/last-scan.json) and interrupted scan checkpoint (session/checkpoint.json) from disk, and clears current scan results.\n\nYour saved settings (settings.json) and Trash Restore History are preserved.")
+                .font(CleanerTypography.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.escape, modifiers: [])
+                Spacer()
+                Button(role: .destructive, action: onConfirm) {
+                    Label("Clear Stored Scan Data", systemImage: "trash")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(CleanerColors.danger)
+                .accessibilityIdentifier("confirmClearStoredScanDataButton")
+            }
+        }
+        .padding(CleanerSpacing.lg)
+        .frame(width: 480)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+public struct ResetSettingsConfirmationSheet: View {
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    public init(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: CleanerSpacing.md) {
+            HStack(spacing: CleanerSpacing.sm) {
+                Image(systemName: "arrow.counterclockwise.circle")
+                    .font(.title)
+                    .foregroundStyle(CleanerColors.danger)
+                Text("Reset Settings to Defaults")
+                    .font(CleanerTypography.titleLarge())
+            }
+
+            Text("This deletes settings.json and restores default scan roots, excluded folders, thresholds, scan categories, sort order, and inspector visibility.\n\nYour stored scan data and Trash Restore History are preserved.")
+                .font(CleanerTypography.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.escape, modifiers: [])
+                Spacer()
+                Button(role: .destructive, action: onConfirm) {
+                    Label("Reset Settings", systemImage: "arrow.counterclockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(CleanerColors.danger)
+                .accessibilityIdentifier("confirmResetSettingsButton")
+            }
+        }
+        .padding(CleanerSpacing.lg)
+        .frame(width: 480)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}

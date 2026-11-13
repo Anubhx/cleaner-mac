@@ -24,10 +24,12 @@ public enum DeletionPlanError: Error, LocalizedError, Equatable, Sendable {
 public struct BlockedDeletionItem: Sendable, Equatable {
     public let url: URL
     public let reason: String
+    public let verificationStatus: SnapshotVerificationStatus?
 
-    public init(url: URL, reason: String) {
+    public init(url: URL, reason: String, verificationStatus: SnapshotVerificationStatus? = nil) {
         self.url = url
         self.reason = reason
+        self.verificationStatus = verificationStatus
     }
 }
 
@@ -111,7 +113,9 @@ public enum DeletionPlanner {
         dryRun: Bool,
         safetyGuard: SafetyGuard,
         excludedFolders: [String] = [],
-        allowAppBundles: Bool = false
+        allowAppBundles: Bool = false,
+        requireSnapshotVerification: Bool = false,
+        liveStatProvider: ((URL) -> LiveFileStat)? = nil
     ) throws -> DeletionPlan {
         if case .permanentDelete(let confirmed) = mode, !confirmed {
             throw DeletionPlanError.permanentConfirmationRequired
@@ -129,6 +133,18 @@ public enum DeletionPlanner {
                     excludedFolders: excludedFolders,
                     allowAppBundles: allowAppBundles
                 )
+                if requireSnapshotVerification {
+                    let live = liveStatProvider?(item.url) ?? .missing
+                    let verification = SnapshotVerificationPolicy.verify(item: item, against: live)
+                    if let reason = SnapshotVerificationPolicy.blockedReason(for: verification) {
+                        blocked.append(BlockedDeletionItem(
+                            url: item.url,
+                            reason: reason,
+                            verificationStatus: verification
+                        ))
+                        continue
+                    }
+                }
                 entries.append(PlannedDeletionEntry(item: item, mode: mode))
             } catch {
                 blocked.append(BlockedDeletionItem(url: item.url, reason: error.localizedDescription))

@@ -93,6 +93,63 @@ public struct KeepOriginalBadge: View {
     }
 }
 
+public struct SnapshotVerificationBadge: View {
+    let status: SnapshotVerificationStatus
+
+    public init(status: SnapshotVerificationStatus) {
+        self.status = status
+    }
+
+    public var body: some View {
+        Label(status.displayLabel, systemImage: status.symbolName)
+            .font(CleanerTypography.caption)
+            .fontWeight(.medium)
+            .foregroundStyle(tint)
+            .padding(.horizontal, CleanerSpacing.xs)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: CleanerRadii.xs))
+            .help(status.helpText)
+            .accessibilityLabel("Verification status: \(status.displayLabel)")
+    }
+
+    private var tint: Color {
+        switch status {
+        case .unchanged:
+            CleanerColors.safe
+        case .modified:
+            CleanerColors.caution
+        case .missing:
+            Color.secondary
+        case .replaced:
+            CleanerColors.danger
+        }
+    }
+}
+
+private extension SnapshotVerificationStatus {
+    var symbolName: String {
+        switch self {
+        case .unchanged: "checkmark.shield"
+        case .modified: "exclamationmark.circle"
+        case .missing: "questionmark.folder"
+        case .replaced: "exclamationmark.triangle.fill"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .unchanged:
+            "Verified on disk: matches the saved snapshot."
+        case .modified:
+            SnapshotVerificationPolicy.staleSnapshotBlockedReason
+        case .missing:
+            SnapshotVerificationPolicy.missingFileBlockedReason
+        case .replaced:
+            SnapshotVerificationPolicy.staleSnapshotBlockedReason
+        }
+    }
+}
+
 public struct DryRunRibbon: View {
     public init() {}
 
@@ -119,6 +176,7 @@ public struct BackgroundScanHUD: View {
     let progress: ScanProgress
     let isScanning: Bool
     let isPaused: Bool
+    let lastScannedAt: Date?
     let onPause: () -> Void
     let onResume: () -> Void
     let onCancel: () -> Void
@@ -128,6 +186,7 @@ public struct BackgroundScanHUD: View {
         progress: ScanProgress,
         isScanning: Bool,
         isPaused: Bool,
+        lastScannedAt: Date? = nil,
         onPause: @escaping () -> Void,
         onResume: @escaping () -> Void,
         onCancel: @escaping () -> Void,
@@ -136,6 +195,7 @@ public struct BackgroundScanHUD: View {
         self.progress = progress
         self.isScanning = isScanning
         self.isPaused = isPaused
+        self.lastScannedAt = lastScannedAt
         self.onPause = onPause
         self.onResume = onResume
         self.onCancel = onCancel
@@ -193,6 +253,11 @@ public struct BackgroundScanHUD: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            } else if !isScanning, let lastScannedAt {
+                Text("Saved \(lastScannedAt.formatted(date: .omitted, time: .shortened))")
+                    .font(CleanerTypography.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             if !isScanning, progress.phase == .completed || progress.phase == .cancelled, let onRescan {
@@ -235,6 +300,204 @@ public struct BackgroundScanHUD: View {
         case .paused: "pause.circle"
         case .completed: "checkmark.circle"
         case .cancelled: "xmark.circle"
+        }
+    }
+}
+
+public struct WorkspaceBannerBar: View {
+    public enum Tone: Equatable, Sendable {
+        case info
+        case subtleCaution
+        case plainNote
+        case subtleStale
+        case prominentWarning
+    }
+
+    let tone: Tone
+    let symbolName: String
+    let primaryText: String
+    let secondaryText: String?
+    let actionTitle: String?
+    let actionAccessibilityLabel: String?
+    let actionIdentifier: String?
+    let actionHelp: String?
+    let onAction: (() -> Void)?
+    let secondaryActionTitle: String?
+    let secondaryActionAccessibilityLabel: String?
+    let secondaryActionIdentifier: String?
+    let secondaryActionHelp: String?
+    let onSecondaryAction: (() -> Void)?
+    let dismissAccessibilityLabel: String
+    let accessibilityIdentifier: String
+    let onDismiss: () -> Void
+
+    public init(
+        tone: Tone,
+        symbolName: String,
+        primaryText: String,
+        secondaryText: String? = nil,
+        actionTitle: String? = nil,
+        actionAccessibilityLabel: String? = nil,
+        actionIdentifier: String? = nil,
+        actionHelp: String? = nil,
+        onAction: (() -> Void)? = nil,
+        secondaryActionTitle: String? = nil,
+        secondaryActionAccessibilityLabel: String? = nil,
+        secondaryActionIdentifier: String? = nil,
+        secondaryActionHelp: String? = nil,
+        onSecondaryAction: (() -> Void)? = nil,
+        dismissAccessibilityLabel: String = "Dismiss status banner",
+        accessibilityIdentifier: String,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.tone = tone
+        self.symbolName = symbolName
+        self.primaryText = primaryText
+        self.secondaryText = secondaryText
+        self.actionTitle = actionTitle
+        self.actionAccessibilityLabel = actionAccessibilityLabel
+        self.actionIdentifier = actionIdentifier
+        self.actionHelp = actionHelp
+        self.onAction = onAction
+        self.secondaryActionTitle = secondaryActionTitle
+        self.secondaryActionAccessibilityLabel = secondaryActionAccessibilityLabel
+        self.secondaryActionIdentifier = secondaryActionIdentifier
+        self.secondaryActionHelp = secondaryActionHelp
+        self.onSecondaryAction = onSecondaryAction
+        self.dismissAccessibilityLabel = dismissAccessibilityLabel
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.onDismiss = onDismiss
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: CleanerSpacing.sm) {
+                if hasActionButtons {
+                    AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
+                        bannerTextBlock
+                        WrappingFlowLayout(horizontalSpacing: CleanerSpacing.xs, verticalSpacing: CleanerSpacing.xs) {
+                            bannerActionButtons
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    bannerTextBlock
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                bannerDismissButton
+            }
+            .padding(.horizontal, CleanerSpacing.md)
+            .padding(.vertical, tone == .prominentWarning ? CleanerSpacing.sm : CleanerSpacing.xs)
+            .background(backgroundFill)
+            .overlay(alignment: .leading) {
+                if tone == .prominentWarning {
+                    Rectangle()
+                        .fill(CleanerColors.caution)
+                        .frame(width: 3)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(accessibilityIdentifier)
+
+            if tone == .prominentWarning {
+                Rectangle()
+                    .fill(CleanerColors.caution.opacity(0.45))
+                    .frame(height: 1)
+            } else {
+                Divider()
+            }
+        }
+    }
+
+    private var hasActionButtons: Bool {
+        (secondaryActionTitle != nil && onSecondaryAction != nil)
+            || (actionTitle != nil && onAction != nil)
+    }
+
+    private var bannerTextBlock: some View {
+        HStack(spacing: CleanerSpacing.sm) {
+            Image(systemName: symbolName)
+                .font(tone == .prominentWarning ? .title3 : .body)
+                .foregroundStyle(iconColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(primaryText)
+                    .font(tone == .prominentWarning ? CleanerTypography.headline : CleanerTypography.callout)
+                    .foregroundStyle(tone == .plainNote ? .secondary : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let secondaryText, !secondaryText.isEmpty {
+                    Text(secondaryText)
+                        .font(CleanerTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bannerActionButtons: some View {
+        if let secondaryActionTitle, let onSecondaryAction {
+            Button(secondaryActionTitle, action: onSecondaryAction)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel(secondaryActionAccessibilityLabel ?? secondaryActionTitle)
+                .accessibilityIdentifier(secondaryActionIdentifier ?? "\(accessibilityIdentifier)SecondaryActionButton")
+                .help(secondaryActionHelp ?? secondaryActionTitle)
+        }
+
+        if let actionTitle, let onAction {
+            if tone == .prominentWarning {
+                Button(actionTitle, action: onAction)
+                    .buttonStyle(.borderedProminent)
+                    .tint(CleanerColors.caution)
+                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                    .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
+                    .help(actionHelp ?? actionTitle)
+            } else {
+                Button(actionTitle, action: onAction)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel(actionAccessibilityLabel ?? actionTitle)
+                    .accessibilityIdentifier(actionIdentifier ?? "\(accessibilityIdentifier)ActionButton")
+                    .help(actionHelp ?? actionTitle)
+            }
+        }
+    }
+
+    private var bannerDismissButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(dismissAccessibilityLabel)
+        .help("Dismiss banner")
+    }
+
+    private var iconColor: Color {
+        switch tone {
+        case .info:
+            Color.accentColor
+        case .subtleCaution, .prominentWarning:
+            CleanerColors.caution
+        case .plainNote, .subtleStale:
+            Color.secondary
+        }
+    }
+
+    private var backgroundFill: Color {
+        switch tone {
+        case .prominentWarning:
+            CleanerColors.caution.opacity(0.14)
+        case .info, .subtleCaution, .plainNote, .subtleStale:
+            Color(nsColor: .controlBackgroundColor)
         }
     }
 }

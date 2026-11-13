@@ -87,6 +87,10 @@ public struct MultiSelectState: Sendable, Equatable {
         checkedIDs.subtract(ids)
     }
 
+    public mutating func uncheck(ids: Set<UUID>) {
+        checkedIDs.subtract(ids)
+    }
+
     public mutating func pruneRemoved(validIDs: Set<UUID>) {
         checkedIDs = checkedIDs.intersection(validIDs)
         highlightedIDs = highlightedIDs.intersection(validIDs)

@@ -25,97 +25,144 @@ public struct ResultsListView: View {
     }
 
     private var categoryHeader: some View {
-        HStack(alignment: .firstTextBaseline) {
+        AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.md, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
             VStack(alignment: .leading, spacing: CleanerSpacing.xxs) {
                 Text(category.displayName)
                     .font(CleanerTypography.titleLarge())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                 Text(category.subtitle)
                     .font(CleanerTypography.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: CleanerSpacing.xxs) {
-                Text(ByteFormatting.string(from: store.reclaimableBytes(for: category)))
-                    .font(CleanerTypography.monoMetric)
-                    .foregroundStyle(.primary)
-                Text("\(store.items(for: category).count) items found")
-                    .font(CleanerTypography.caption)
-                    .foregroundStyle(.secondary)
-            }
+            categoryMetricsBlock
         }
-        .padding(.horizontal, CleanerSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, CleanerSpacing.md)
         .padding(.vertical, CleanerSpacing.md)
     }
 
+    private var categoryMetricsBlock: some View {
+        VStack(alignment: .trailing, spacing: CleanerSpacing.xxs) {
+            Text(ByteFormatting.string(from: store.reclaimableBytes(for: category)))
+                .font(CleanerTypography.monoMetric)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text("\(store.items(for: category).count) items found")
+                .font(CleanerTypography.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     private var actionBar: some View {
-        HStack(spacing: CleanerSpacing.sm) {
-            Menu {
-                ForEach(ResultSortOrder.allCases, id: \.self) { order in
-                    Button {
-                        store.sortOrder = order
-                    } label: {
-                        if store.sortOrder == order {
-                            Label(order.rawValue, systemImage: "checkmark")
-                        } else {
-                            Text(order.rawValue)
-                        }
-                    }
-                }
-            } label: {
-                Label(store.sortOrder.rawValue, systemImage: "arrow.up.arrow.down")
+        AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: CleanerSpacing.xs, stackedTrailingAlignment: .leading) {
+            WrappingFlowLayout(horizontalSpacing: CleanerSpacing.xs, verticalSpacing: CleanerSpacing.xs) {
+                actionBarFilterControls
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .accessibilityLabel("Sort results")
-
-            Button("Select All") {
-                store.selectAllInActiveCategory()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(store.visibleItems.isEmpty)
-
-            Button("Clear") {
-                store.clearChecksInActiveCategory()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(store.selection.checkedIDs.isEmpty)
-
-            Spacer()
 
             if !store.checkedItemsInAllCategories.isEmpty {
-                let count = store.checkedItemsInAllCategories.count
-                let sizeSuffix = ByteFormatting.actionSizeSuffix(bytes: store.checkedUniqueBytes)
-
-                Button(role: .destructive) {
-                    store.requestBatchPermanentDelete()
-                } label: {
-                    Label("Delete Permanently…", systemImage: "trash.slash")
+                WrappingFlowLayout(horizontalSpacing: CleanerSpacing.xs, verticalSpacing: CleanerSpacing.xs) {
+                    actionBarBatchControls
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .foregroundStyle(CleanerColors.danger)
-
-                Button {
-                    store.requestBatchTrash()
-                } label: {
-                    Label(
-                        store.isDryRunEnabled
-                            ? "Simulate (\(count)\(sizeSuffix))"
-                            : "Move \(count) to Trash\(sizeSuffix)",
-                        systemImage: store.isDryRunEnabled ? "eye" : "trash"
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
         }
-        .padding(.horizontal, CleanerSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, CleanerSpacing.md)
         .padding(.vertical, CleanerSpacing.xs)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var actionBarFilterControls: some View {
+        Menu {
+            ForEach(ResultSortOrder.allCases, id: \.self) { order in
+                Button {
+                    store.sortOrder = order
+                } label: {
+                    if store.sortOrder == order {
+                        Label(order.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(order.rawValue)
+                    }
+                }
+            }
+        } label: {
+            Label(store.sortOrder.rawValue, systemImage: "arrow.up.arrow.down")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Sort results")
+
+        Button("Select All") {
+            store.selectAllInActiveCategory()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(store.visibleItems.isEmpty)
+
+        Button("Clear") {
+            store.clearChecksInActiveCategory()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(store.selection.checkedIDs.isEmpty)
+
+        if store.isResultsFromPersistedSnapshot {
+            let hasAnySnapshotItems = ScanCategory.allCases.contains { !store.items(for: $0).isEmpty }
+            Button {
+                Task { await store.reverifyLoadedSnapshot() }
+            } label: {
+                Label(
+                    store.isReverifyingSnapshot ? "Re-verifying…" : "Re-verify",
+                    systemImage: "checkmark.shield"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .fixedSize(horizontal: true, vertical: false)
+            .disabled(store.isReverifyingSnapshot || !hasAnySnapshotItems)
+            .help("Re-verify every snapshot item against disk using lstat")
+            .accessibilityLabel("Re-verify")
+            .accessibilityIdentifier("reverifySnapshotButton")
+        }
+    }
+
+    @ViewBuilder
+    private var actionBarBatchControls: some View {
+        if !store.checkedItemsInAllCategories.isEmpty {
+            let count = store.checkedItemsInAllCategories.count
+            let sizeSuffix = ByteFormatting.actionSizeSuffix(bytes: store.checkedUniqueBytes)
+
+            Button(role: .destructive) {
+                store.requestBatchPermanentDelete()
+            } label: {
+                Label("Delete Permanently…", systemImage: "trash.slash")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(CleanerColors.danger)
+
+            Button {
+                store.requestBatchTrash()
+            } label: {
+                Label(
+                    store.isDryRunEnabled
+                        ? "Simulate (\(count)\(sizeSuffix))"
+                        : "Move \(count) to Trash\(sizeSuffix)",
+                    systemImage: store.isDryRunEnabled ? "eye" : "trash"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     @ViewBuilder
@@ -156,14 +203,17 @@ public struct ResultsListView: View {
 
     private func duplicateGroupCard(_ group: DuplicateGroup) -> some View {
         VStack(alignment: .leading, spacing: CleanerSpacing.xxs) {
-            HStack {
+            AdaptiveRowLayout(horizontalSpacing: CleanerSpacing.sm, verticalSpacing: 2, stackedTrailingAlignment: .leading) {
                 Text("Exact Match Group · \(group.duplicates.count) duplicate\(group.duplicates.count == 1 ? "" : "s")")
                     .font(CleanerTypography.callout)
                     .foregroundStyle(.secondary)
-                Spacer()
+                    .lineLimit(1)
+
                 Text("\(ByteFormatting.string(from: group.reclaimableBytes)) reclaimable")
                     .font(CleanerTypography.monoMetric)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, CleanerSpacing.sm)
             .padding(.top, CleanerSpacing.xs)
@@ -185,6 +235,7 @@ public struct ResultsListView: View {
             item: item,
             isHighlighted: store.selection.highlightedIDs.contains(item.id),
             isChecked: store.selection.checkedIDs.contains(item.id),
+            verificationStatus: store.verificationStatus(for: item),
             onToggleCheck: {
                 store.toggleCheck(for: item)
             },

@@ -6,6 +6,7 @@ public struct ResultRowView: View {
     let item: ScannedItem
     let isHighlighted: Bool
     let isChecked: Bool
+    let verificationStatus: SnapshotVerificationStatus?
     let onToggleCheck: () -> Void
     let onClickRow: (EventModifiers) -> Void
 
@@ -13,12 +14,14 @@ public struct ResultRowView: View {
         item: ScannedItem,
         isHighlighted: Bool,
         isChecked: Bool,
+        verificationStatus: SnapshotVerificationStatus? = nil,
         onToggleCheck: @escaping () -> Void,
         onClickRow: @escaping (EventModifiers) -> Void
     ) {
         self.item = item
         self.isHighlighted = isHighlighted
         self.isChecked = isChecked
+        self.verificationStatus = verificationStatus
         self.onToggleCheck = onToggleCheck
         self.onClickRow = onClickRow
     }
@@ -65,31 +68,42 @@ public struct ResultRowView: View {
                         Text("· Keep Original")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(CleanerColors.safe)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     } else if let deadKind = item.deadKind {
                         Text("· \(deadKind.displayLabel)")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
 
                     if let modified = item.modifiedDate {
                         Text("· Modified \(modified.formatted(date: .abbreviated, time: .omitted))")
                             .font(CleanerTypography.caption)
                             .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
             }
 
             Spacer(minLength: CleanerSpacing.sm)
 
+            if let verificationStatus {
+                SnapshotVerificationBadge(status: verificationStatus)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+
             Text(ByteFormatting.string(from: item.reclaimableDiskBytes))
                 .font(CleanerTypography.monoMetric)
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, CleanerSpacing.sm)
         .padding(.vertical, CleanerSpacing.xs)
-        .help(item.isRecommendedKeep
-              ? "Keep Original — \(item.risk.reason)"
-              : "\(item.risk.level.label) — \(item.risk.reason)")
+        .help(rowHelpText)
         .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: CleanerRadii.sm)
@@ -103,7 +117,7 @@ public struct ResultRowView: View {
             onClickRow(currentEventModifiers())
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.name), \(ByteFormatting.string(from: item.reclaimableDiskBytes)), \(item.risk.level.label)")
+        .accessibilityLabel(rowAccessibilityLabel)
         .accessibilityValue(isChecked ? "Selected for cleanup" : "Not selected")
         .accessibilityHint("Click to preview. Command-click or Shift-click to multi-select. Press Space to toggle selection.")
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
@@ -126,6 +140,24 @@ public struct ResultRowView: View {
         case .high:
             return CleanerColors.danger
         }
+    }
+
+    private var rowAccessibilityLabel: String {
+        var parts = [item.name, ByteFormatting.string(from: item.reclaimableDiskBytes), item.risk.level.label]
+        if let verificationStatus {
+            parts.append(verificationStatus.displayLabel)
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private var rowHelpText: String {
+        if let verificationStatus, verificationStatus != .unchanged,
+           let blockedReason = SnapshotVerificationPolicy.blockedReason(for: verificationStatus) {
+            return blockedReason
+        }
+        return item.isRecommendedKeep
+            ? "Keep Original — \(item.risk.reason)"
+            : "\(item.risk.level.label) — \(item.risk.reason)"
     }
 
     private var itemSymbol: String {

@@ -129,7 +129,7 @@ enum CategoryClassifier {
             accessedDate: source.accessedDate,
             category: category,
             deadKind: source.deadKind,
-            inode: source.inode,
+            inode: source.inode ?? FilesystemProbes.inodeIdentity(for: source.url),
             linkCount: source.linkCount,
             isCloudDataless: source.isCloudDataless,
             contentTypeIdentifier: source.contentTypeIdentifier

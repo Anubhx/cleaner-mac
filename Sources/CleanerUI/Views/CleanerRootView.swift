@@ -3,17 +3,24 @@ import CleanerCore
 
 public struct CleanerRootView: View {
     @Bindable var store: CleanerWorkspaceStore
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var didAutoCollapseSidebar = false
+    @State private var measuredContainerWidth: CGFloat = 1240
+
+    private static let threeColumnMinimumWidth: CGFloat = 950
 
     public init(store: CleanerWorkspaceStore) {
         self.store = store
     }
 
     public var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarContent
-                .navigationSplitViewColumnWidth(min: 220, ideal: 256, max: 300)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                .navigationSplitViewColumnWidth(min: 196, ideal: 220, max: 270)
         } detail: {
             detailContent
+                .frame(minWidth: 0, idealWidth: 320, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
         .inspector(isPresented: $store.isInspectorVisible) {
             PreviewPaneView(
@@ -21,6 +28,7 @@ public struct CleanerRootView: View {
                 payload: store.previewPayload,
                 isLoading: store.isLoadingPreview,
                 isChecked: store.focusedItem.map { store.selection.checkedIDs.contains($0.id) } ?? false,
+                verificationStatus: store.focusedItem.flatMap { store.verificationStatus(for: $0) },
                 onToggleCheck: {
                     if let item = store.focusedItem {
                         store.toggleCheck(for: item)
@@ -37,7 +45,7 @@ public struct CleanerRootView: View {
                     }
                 }
             )
-            .inspectorColumnWidth(min: 340, ideal: 380, max: 460)
+            .inspectorColumnWidth(min: 340, ideal: 340, max: 420)
             .toolbar { inspectorToolbarItems }
         }
         .searchable(text: $store.searchQuery, placement: .toolbar, prompt: "Filter filename or path")
@@ -84,29 +92,71 @@ public struct CleanerRootView: View {
                 store.lastExecutionReport = nil
             }
         }
-        .frame(minWidth: 980, minHeight: 640)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        measuredContainerWidth = proxy.size.width
+                        updateAdaptiveColumnVisibility(
+                            for: proxy.size.width,
+                            isInspectorVisible: store.isInspectorVisible
+                        )
+                    }
+                    .onChange(of: proxy.size.width) { _, newWidth in
+                        measuredContainerWidth = newWidth
+                        updateAdaptiveColumnVisibility(
+                            for: newWidth,
+                            isInspectorVisible: store.isInspectorVisible
+                        )
+                    }
+            }
+        }
+        .onChange(of: store.isInspectorVisible) { _, isVisible in
+            updateAdaptiveColumnVisibility(
+                for: measuredContainerWidth,
+                isInspectorVisible: isVisible
+            )
+        }
+        .frame(minWidth: 740, minHeight: 560)
         .focusedSceneValue(\.workspaceStore, store)
+    }
+
+    private func updateAdaptiveColumnVisibility(for width: CGFloat, isInspectorVisible: Bool) {
+        guard width > 0 else { return }
+        if width < Self.threeColumnMinimumWidth && isInspectorVisible {
+            if columnVisibility != .detailOnly {
+                columnVisibility = .detailOnly
+                didAutoCollapseSidebar = true
+            }
+        } else if didAutoCollapseSidebar {
+            columnVisibility = .all
+            didAutoCollapseSidebar = false
+        }
     }
 
     private var sidebarContent: some View {
         VStack(spacing: 0) {
             List(selection: $store.selectedSidebarDestination) {
-                Section("Scan Categories") {
+                Section {
                     ForEach(ScanCategory.allCases) { category in
                         sidebarCategoryRow(category)
                             .tag(SidebarDestination.category(category))
                     }
+                } header: {
+                    sidebarSectionHeader("Scan Categories")
                 }
 
-                Section("Reversibility & Rules") {
+                Section {
                     Label {
-                        HStack {
+                        HStack(spacing: CleanerSpacing.xs) {
                             Text("Restore History")
+                                .lineLimit(1)
                             Spacer()
                             if !store.historyEntries.isEmpty {
                                 Text("\(store.historyEntries.count)")
                                     .font(CleanerTypography.monoMetric)
                                     .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                     } icon: {
@@ -114,8 +164,15 @@ public struct CleanerRootView: View {
                     }
                     .tag(SidebarDestination.history)
 
-                    Label("Scan & Safety Settings", systemImage: "lock.shield")
-                        .tag(SidebarDestination.settings)
+                    Label {
+                        Text("Scan & Safety Settings")
+                            .lineLimit(1)
+                    } icon: {
+                        Image(systemName: "lock.shield")
+                    }
+                    .tag(SidebarDestination.settings)
+                } header: {
+                    sidebarSectionHeader("Reversibility & Rules")
                 }
             }
             .listStyle(.sidebar)
@@ -132,6 +189,7 @@ public struct CleanerRootView: View {
                     progress: store.progress,
                     isScanning: store.isScanning,
                     isPaused: store.isPaused,
+                    lastScannedAt: store.loadedSnapshotFinishedAt,
                     onPause: { Task { await store.pauseScan() } },
                     onResume: { Task { await store.resumeScan() } },
                     onCancel: { Task { await store.cancelScan() } },
@@ -141,6 +199,12 @@ public struct CleanerRootView: View {
             .padding(CleanerSpacing.sm)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func sidebarSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .lineLimit(1)
+            .padding(.leading, CleanerSpacing.xs)
     }
 
     private func sidebarCategoryRow(_ category: ScanCategory) -> some View {
@@ -178,37 +242,27 @@ public struct CleanerRootView: View {
 
             if let banner = store.statusBannerMessage {
                 let isLimitedBanner = store.isLimitedScanBannerVisible
-                HStack(spacing: CleanerSpacing.xs) {
-                    Image(systemName: isLimitedBanner ? "exclamationmark.triangle.fill" : "info.circle")
-                        .foregroundStyle(isLimitedBanner ? CleanerColors.caution : Color.accentColor)
-                    Text(banner)
-                        .font(CleanerTypography.callout)
-                        .lineLimit(2)
-                    Spacer()
-                    if isLimitedBanner {
-                        Button("Open Full Disk Access Settings…") {
-                            store.openFullDiskAccessSettings()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .accessibilityLabel("Open Full Disk Access Settings")
-                        .accessibilityIdentifier("bannerOpenFullDiskAccessButton")
-                        .help("Open Privacy & Security > Full Disk Access in System Settings")
-                    }
-                    Button {
-                        store.statusBannerMessage = nil
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Dismiss status banner")
-                    .help("Dismiss banner")
-                }
-                .padding(.horizontal, CleanerSpacing.md)
-                .padding(.vertical, CleanerSpacing.xs)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .accessibilityIdentifier("workspaceStatusBanner")
-                Divider()
+                WorkspaceBannerBar(
+                    tone: isLimitedBanner ? .subtleCaution : .info,
+                    symbolName: isLimitedBanner ? "exclamationmark.triangle.fill" : "info.circle",
+                    primaryText: banner,
+                    actionTitle: isLimitedBanner ? "Open Full Disk Access Settings…" : nil,
+                    actionAccessibilityLabel: isLimitedBanner ? "Open Full Disk Access Settings" : nil,
+                    actionIdentifier: isLimitedBanner ? "bannerOpenFullDiskAccessButton" : nil,
+                    actionHelp: isLimitedBanner ? "Open Privacy & Security > Full Disk Access in System Settings" : nil,
+                    onAction: isLimitedBanner ? { store.openFullDiskAccessSettings() } : nil,
+                    dismissAccessibilityLabel: "Dismiss status banner",
+                    accessibilityIdentifier: "workspaceStatusBanner",
+                    onDismiss: { store.statusBannerMessage = nil }
+                )
+            }
+
+            if let checkpointBanner = store.interruptedCheckpointPresentation {
+                interruptedCheckpointBannerView(for: checkpointBanner)
+            }
+
+            if let snapshotBanner = store.snapshotBannerPresentation {
+                snapshotBannerView(for: snapshotBanner)
             }
 
             switch store.selectedSidebarDestination {
@@ -269,6 +323,81 @@ public struct CleanerRootView: View {
                 .accessibilityLabel(store.primaryScanActionTitle)
             }
         }
+    }
+
+    private func interruptedCheckpointBannerView(for presentation: InterruptedCheckpointPresentation) -> some View {
+        WorkspaceBannerBar(
+            tone: .info,
+            symbolName: "clock.arrow.circlepath",
+            primaryText: presentation.primaryText,
+            secondaryText: presentation.secondaryText,
+            actionTitle: "Resume",
+            actionAccessibilityLabel: "Resume interrupted scan",
+            actionIdentifier: "checkpointResumeButton",
+            actionHelp: "Resume the interrupted scan from where it stopped",
+            onAction: { Task { await store.resumeInterruptedScan() } },
+            secondaryActionTitle: "Start Fresh",
+            secondaryActionAccessibilityLabel: "Start fresh scan",
+            secondaryActionIdentifier: "checkpointStartFreshButton",
+            secondaryActionHelp: "Discard the saved checkpoint and run a new scan",
+            onSecondaryAction: { Task { await store.startFreshFromInterruptedCheckpoint() } },
+            dismissAccessibilityLabel: "Dismiss interrupted scan prompt",
+            accessibilityIdentifier: "interruptedCheckpointBanner",
+            onDismiss: { Task { await store.discardInterruptedCheckpoint() } }
+        )
+    }
+
+    private func snapshotBannerView(for presentation: SnapshotBannerPresentation) -> some View {
+        let tone: WorkspaceBannerBar.Tone
+        let symbolName: String
+        let actionTitle: String?
+        let onAction: (() -> Void)?
+        let secondaryActionTitle: String?
+        let onSecondaryAction: (() -> Void)?
+
+        switch presentation.staleness {
+        case .fresh:
+            tone = .plainNote
+            symbolName = "clock"
+            actionTitle = nil
+            onAction = nil
+            secondaryActionTitle = nil
+            onSecondaryAction = nil
+        case .subtle:
+            tone = .subtleStale
+            symbolName = "clock.arrow.circlepath"
+            actionTitle = "Scan Again"
+            onAction = { Task { await store.startScan() } }
+            secondaryActionTitle = nil
+            onSecondaryAction = nil
+        case .stale:
+            tone = .prominentWarning
+            symbolName = "exclamationmark.triangle.fill"
+            actionTitle = "Scan Again"
+            onAction = { Task { await store.startScan() } }
+            secondaryActionTitle = "Re-verify"
+            onSecondaryAction = { Task { await store.reverifyLoadedSnapshot() } }
+        }
+
+        return WorkspaceBannerBar(
+            tone: tone,
+            symbolName: symbolName,
+            primaryText: presentation.primaryText,
+            secondaryText: presentation.secondaryText,
+            actionTitle: actionTitle,
+            actionAccessibilityLabel: actionTitle,
+            actionIdentifier: "snapshotBannerRescanButton",
+            actionHelp: actionTitle != nil ? "Run a fresh scan before deleting files (Cmd+R)" : nil,
+            onAction: onAction,
+            secondaryActionTitle: secondaryActionTitle,
+            secondaryActionAccessibilityLabel: secondaryActionTitle,
+            secondaryActionIdentifier: "snapshotBannerReverifyButton",
+            secondaryActionHelp: secondaryActionTitle != nil ? "Re-verify saved snapshot items against disk using lstat" : nil,
+            onSecondaryAction: onSecondaryAction,
+            dismissAccessibilityLabel: "Dismiss last scan banner",
+            accessibilityIdentifier: "snapshotStatusBanner",
+            onDismiss: { store.dismissSnapshotBanner() }
+        )
     }
 
     @ToolbarContentBuilder

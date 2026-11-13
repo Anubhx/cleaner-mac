@@ -249,7 +249,7 @@ enum DirectoryFrontierWalker {
     ) {
         let isRoot = state.configuration.roots.contains { $0.standardizedFileURL == directory }
         guard !isRoot,
-              let values = try? directory.resourceValues(forKeys: [.isPackageKey, .isHiddenKey]),
+              let values = try? directory.resourceValues(forKeys: [.isPackageKey, .isHiddenKey, .contentModificationDateKey, .creationDateKey]),
               EmptyDirectoryPolicy.shouldInspectDirectory(
                   name: directory.lastPathComponent,
                   isPackage: values.isPackage ?? false,
@@ -266,6 +266,8 @@ enum DirectoryFrontierWalker {
             logicalSize: 0,
             allocatedSize: 0,
             isDirectory: true,
+            modifiedDate: values.contentModificationDate,
+            createdDate: values.creationDate,
             category: .deadFiles,
             deadKind: .emptyDirectory,
             inode: FilesystemProbes.inodeIdentity(for: directory)

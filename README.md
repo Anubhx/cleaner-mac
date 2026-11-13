@@ -2,9 +2,9 @@
 
 **CleanerMac** is a native, local-only macOS disk-hygiene utility written in Swift 6 and SwiftUI for macOS 14+ on Apple Silicon (`arm64` only). It finds duplicates, oversized files, stale untouched files, and dead leftovers (orphaned app data, caches, broken downloads, empty folders) using a background scanner, live multi-type preview inspector, Trash-first reversibility, and strict protected-path safety guards.
 
-![CleanerMac interactive walkthrough: background scan, Keep Original duplicates, live file preview, APFS sparse large files, leftover caches, and Dry-Run simulation](docs/images/cleanermac-walkthrough.gif)
+![CleanerMac v2.0 interactive walkthrough: live background scan, SHA-256 duplicates with Keep Original and live preview, saved scan snapshot with Re-verify safety guard, large files, categorized leftovers, and Dry-Run simulation](docs/images/cleanermac-walkthrough.gif)
 
-*End-to-end walkthrough: background scan with live pause/cancel controls, SHA-256 duplicate groups with `Keep Original` protection and live preview inspector, APFS sparse block awareness in Large Files, categorized dead leftovers, and non-destructive Dry-Run simulation.*
+*End-to-end walkthrough (v2.0): live background scan & disk capacity HUD, SHA-256 duplicate groups with `Keep Original` protection and live preview inspector, saved scan snapshot banners with live `Re-verify` staleness guard, large files, categorized dead leftovers, and non-destructive Dry-Run simulation.*
 
 <details>
 <summary>High-resolution workspace screenshot (static retina view)</summary>
