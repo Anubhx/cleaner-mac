@@ -180,7 +180,7 @@ struct ScanCheckpointStoreTests {
         defer { try? FileManager.default.removeItem(at: sandbox) }
 
         let scanRoot = sandbox.appendingPathComponent("ScanTree", isDirectory: true)
-        for i in 0..<15 {
+        for i in 0..<30 {
             let folder = scanRoot.appendingPathComponent("dir-\(i)", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let file = folder.appendingPathComponent("data.bin")
@@ -197,20 +197,27 @@ struct ScanCheckpointStoreTests {
 
         let baselineCoordinator = ScanCoordinator(safetyGuard: SafetyGuard(currentUserHome: sandbox))
         let baseline = await baselineCoordinator.runFullScan(configuration: config)
-        #expect(baseline.items(in: .largeFiles).count == 15)
+        #expect(baseline.items(in: .largeFiles).count == 30)
 
         // 1. Periodic checkpoint trigger every 4 directories -> pause mid-scan -> verify checkpoint exists -> resume -> clears on complete
+        let (checkpointStream, continuation) = AsyncStream.makeStream(of: ScanCheckpoint.self)
         let coordinator = ScanCoordinator(
             safetyGuard: SafetyGuard(currentUserHome: sandbox),
             perDirectoryDelay: .milliseconds(20),
             checkpointDirectoryInterval: 4,
-            checkpointStore: checkpointStore
+            checkpointStore: checkpointStore,
+            onPeriodicCheckpoint: { cp in
+                continuation.yield(cp)
+            }
         )
 
         let scanTask = Task {
             await coordinator.runFullScan(configuration: config)
         }
-        try await Task.sleep(for: .milliseconds(130))
+
+        var iterator = checkpointStream.makeAsyncIterator()
+        let midScanFromCallback = await iterator.next()
+        #expect(midScanFromCallback != nil)
 
         // Mid-scan periodic checkpoint should already exist on disk
         if case .loaded(let midScanCheckpoint, _, _, _) = await checkpointStore.load() {
@@ -221,6 +228,7 @@ struct ScanCheckpointStoreTests {
         }
 
         let pausedCheckpoint = await coordinator.pause()
+        continuation.finish()
         let pausedOutcome = await scanTask.value
         #expect(pausedOutcome.progress.phase == .paused)
 
@@ -268,7 +276,7 @@ struct ScanCheckpointStoreTests {
         let activeTask = Task {
             await activeCoordinator.runFullScan(configuration: config)
         }
-        try await Task.sleep(for: .milliseconds(120))
+        try await Task.sleep(for: .milliseconds(150))
 
         let captured = try #require(activeCoordinator.captureCheckpointSynchronously())
         try checkpointStore.saveSynchronously(captured)
